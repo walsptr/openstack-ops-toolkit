@@ -1,12 +1,15 @@
 #!/bin/bash
+# ============================================================
+# @name:        Import Volume from NetApp
+# @description: Bring an existing NetApp volume under Cinder management (cinder manage)
+# @mutates:     yes
+# @requires:    admin, cinder
+# @tags:        cinder, volume, netapp, manage, import
+# ============================================================
 
 set -o errexit
 set -o nounset
 set -o pipefail
-
-# ============================================================
-# Cinder Manage Volume
-# ============================================================
 
 echo "========================================"
 echo "       Cinder Manage Volume"

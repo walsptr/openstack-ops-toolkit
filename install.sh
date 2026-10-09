@@ -14,13 +14,11 @@ BIN_PATH="/usr/local/bin/openstack-ops-toolkit"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MAIN_SCRIPT="$SCRIPT_DIR/main.sh"
-ENV_EXAMPLE="$SCRIPT_DIR/scripts.env.example"
 
 # Versi minimum
 BASH_MIN_MAJOR=4
 FZF_MIN_VERSION="0.20.0"   # versi terlama yang sudah dites dengan TUI main.sh
 
-ASSUME_YES=0
 SKIP_CHECKS=0
 CHECKED=0
 
@@ -46,12 +44,15 @@ warn() {
 }
 
 usage() {
-    echo "Usage: install.sh [--yes] [--skip-checks]"
+    echo "Usage: install.sh [--skip-checks]"
     echo
     echo "Options:"
-    echo "  -y, --yes         Non-interaktif: otomatis tambahkan entry baru ke scripts.env"
     echo "  --skip-checks     Lewati pengecekan requirement (tidak disarankan)"
+    echo "  -y, --yes         Deprecated, tidak berpengaruh (installer tidak lagi bertanya)"
     echo "  -h, --help        Tampilkan help"
+    echo
+    echo "Script ditemukan otomatis dari header metadata (@name)."
+    echo "scripts.env yang sudah ada tidak pernah diubah."
 }
 
 # version_ge A B  => true jika A >= B
@@ -197,72 +198,49 @@ check_requirements() {
     echo
 }
 
-# Print path script dari file scripts.env (format: Nama,path)
-env_paths() {
-    local line path
+# Laporkan entry scripts.env yang redundan: path sama dengan script hasil
+# discovery dan nama sama dengan @name. File TIDAK diubah.
+report_redundant_env() {
+    local env_file="$1"
+    local -A discovered=()
+    local rec rel name line p abs
+    local redundant=()
+
+    for rec in "${DISCOVERED[@]}"; do
+        IFS="$RS" read -r _ rel _ name _ <<< "$rec"
+        discovered["$(realpath -m -s -- "$INSTALL_DIR/$rel")"]="$name"
+    done
 
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%$'\r'}"
-        [[ -z "${line//[[:space:]]/}" || "$line" == \#* || "$line" != *,* ]] && continue
+        line="${line%%[[:space:]]#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
 
-        path="${line##*,}"
-        path="${path//[[:space:]]/}"
-        [[ -n "$path" ]] && echo "$path"
-    done < "$1"
+        [[ -z "$line" || "$line" == \#* || "$line" == !* || "$line" != *,* ]] && continue
+
+        name="${line%,*}"
+        name="${name%"${name##*[![:space:]]}"}"
+        p="${line##*,}"
+        p="${p#"${p%%[![:space:]]*}"}"
+
+        [[ "$p" != /* ]] && p="$INSTALL_DIR/$p"
+        abs="$(realpath -m -s -- "$p")"
+
+        if [[ -n "${discovered[$abs]+x}" && "${discovered[$abs]}" == "$name" ]]; then
+            redundant+=("$line")
+        fi
+    done < "$env_file"
+
+    if (( ${#redundant[@]} > 0 )); then
+        echo
+        warn "Entry berikut di scripts.env redundan (sudah ditemukan otomatis via @name):"
+        printf '     %s\n' "${redundant[@]}"
+        info "Entry tersebut bisa dihapus. File tidak diubah oleh installer."
+        echo
+    fi
 
     return 0
-}
-
-# Tambahkan entry dari scripts.env.example yang belum ada di scripts.env
-sync_scripts_env() {
-    local env_file="$1"
-    local line path
-    local missing=()
-    local -A existing=()
-
-    # Path script yang sudah terdaftar
-    while IFS= read -r path; do
-        existing["$path"]=1
-    done < <(env_paths "$env_file")
-
-    # Cocokkan berdasarkan path script
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        [[ -z "${line//[[:space:]]/}" || "$line" == \#* || "$line" != *,* ]] && continue
-
-        path="${line##*,}"
-        path="${path//[[:space:]]/}"
-
-        [[ -n "${existing[$path]:-}" ]] || missing+=("$line")
-    done < "$ENV_EXAMPLE"
-
-    if (( ${#missing[@]} == 0 )); then
-        info "scripts.env sudah berisi semua script."
-        return 0
-    fi
-
-    echo
-    warn "Script baru yang belum terdaftar di scripts.env:"
-    printf '     %s\n' "${missing[@]}"
-    echo
-
-    local answer="n"
-
-    if (( ASSUME_YES )); then
-        answer="y"
-    elif [[ -t 0 ]]; then
-        read -rp "   Tambahkan ke scripts.env? [Y/n]: " answer
-        answer="${answer:-y}"
-    else
-        info "Non-interaktif: lewati (gunakan --yes untuk menambahkan otomatis)."
-    fi
-
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-        # Pastikan file diakhiri newline sebelum append
-        [[ -s "$env_file" && -n "$(tail -c1 "$env_file")" ]] && echo >> "$env_file"
-        printf '%s\n' "${missing[@]}" >> "$env_file"
-        success "${#missing[@]} entry ditambahkan ke scripts.env."
-    fi
 }
 
 # ============================================================
@@ -272,7 +250,7 @@ sync_scripts_env() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -y|--yes)
-            ASSUME_YES=1
+            # Deprecated: dulu untuk append entry scripts.env, kini tidak berpengaruh
             ;;
         --skip-checks)
             SKIP_CHECKS=1
@@ -331,10 +309,7 @@ if [[ "$EUID" -ne 0 ]]; then
     echo "   Re-running installer with sudo..."
     echo
 
-    args=(--checked)
-    (( ASSUME_YES )) && args+=(--yes)
-
-    exec sudo bash "$SCRIPT_DIR/install.sh" "${args[@]}"
+    exec sudo bash "$SCRIPT_DIR/install.sh" --checked
 fi
 
 # ============================================================
@@ -346,18 +321,14 @@ info "Checking installation files..."
 [[ -f "$MAIN_SCRIPT" ]] || \
     error "main.sh not found: $MAIN_SCRIPT"
 
-[[ -f "$ENV_EXAMPLE" ]] || \
-    error "scripts.env.example not found: $ENV_EXAMPLE"
+# Discovery script ber-@name di source (parser yang sama dengan main.sh)
+RS=$'\x1f'
+mapfile -t DISCOVERED < <(bash "$MAIN_SCRIPT" --discover "$SCRIPT_DIR")
 
-# Semua script di scripts.env.example harus ada di source
-while IFS= read -r path; do
-    [[ "$path" == /* ]] && continue
+(( ${#DISCOVERED[@]} > 0 )) || \
+    error "Tidak ada script ber-@name di source: $SCRIPT_DIR"
 
-    [[ -f "$SCRIPT_DIR/$path" ]] || \
-        error "Script di scripts.env.example tidak ditemukan: $path"
-done < <(env_paths "$ENV_EXAMPLE")
-
-success "Installation files are valid."
+success "Installation files are valid (${#DISCOVERED[@]} script ditemukan)."
 
 # ============================================================
 # Create workdir
@@ -373,10 +344,14 @@ success "Workdir ready: $INSTALL_DIR"
 # Install operational scripts
 # ============================================================
 
-# Kategori = direktori top-level (non-hidden) di source,
-# mis. compute/, identity/, network/, volumes/
+# Kategori = direktori top-level yang berisi script ber-@name (dinamis).
+# lib/ ikut di-copy jika ada, karena script bisa memakai helper di sana.
 mapfile -t CATEGORY_DIRS < <(
-    find "$SCRIPT_DIR" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f\n' | sort
+    for rec in "${DISCOVERED[@]}"; do
+        IFS="$RS" read -r _ rel _ <<< "$rec"
+        echo "${rel%%/*}"
+    done | sort -u
+    [[ -d "$SCRIPT_DIR/lib" ]] && echo "lib"
 )
 
 if [[ "$(realpath "$SCRIPT_DIR")" == "$(realpath "$INSTALL_DIR")" ]]; then
@@ -404,23 +379,18 @@ for dir in "${CATEGORY_DIRS[@]}"; do
 done
 
 # ============================================================
-# Install scripts.env
+# scripts.env (opsional, override lokal) — tidak pernah ditimpa
 # ============================================================
 
 if [[ -f "$INSTALL_DIR/scripts.env" ]]; then
 
-    info "Existing scripts.env detected."
-    info "Keeping existing configuration."
+    info "Existing scripts.env detected (override lokal), tidak diubah."
 
-    sync_scripts_env "$INSTALL_DIR/scripts.env"
+    report_redundant_env "$INSTALL_DIR/scripts.env"
 
 else
 
-    info "Creating scripts.env from scripts.env.example..."
-
-    cp "$ENV_EXAMPLE" "$INSTALL_DIR/scripts.env"
-
-    success "scripts.env created."
+    info "Tidak ada scripts.env (opsional). Lihat scripts.env.example untuk override."
 
 fi
 
@@ -441,7 +411,9 @@ success "Command installed: $BIN_PATH"
 # ============================================================
 
 chmod 0755 "$INSTALL_DIR"
-chmod 0644 "$INSTALL_DIR/scripts.env"
+if [[ -f "$INSTALL_DIR/scripts.env" ]]; then
+    chmod 0644 "$INSTALL_DIR/scripts.env"
+fi
 
 # ============================================================
 # Final summary
@@ -455,7 +427,7 @@ echo
 echo "Workdir:"
 echo "  $INSTALL_DIR"
 echo
-echo "Configuration:"
+echo "Override (opsional):"
 echo "  $INSTALL_DIR/scripts.env"
 echo
 echo "Scripts:"

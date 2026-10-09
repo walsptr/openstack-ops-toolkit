@@ -1,12 +1,14 @@
 #!/bin/bash
+# ============================================================
+# @name:        Instances Information
+# @description: Show instance name, project ID, and project name for an instance ID
+# @mutates:     no
+# @tags:        nova, server, instance, project, lookup
+# ============================================================
 
 set -o errexit
 set -o nounset
 set -o pipefail
-
-# ============================================================
-# OpenStack Instance Information
-# ============================================================
 
 read -rp "Instance ID: " INSTANCE_ID
 

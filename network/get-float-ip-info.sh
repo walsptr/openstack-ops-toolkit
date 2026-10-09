@@ -1,7 +1,9 @@
 #!/bin/bash
-
 # ============================================================
-# Get Floating IP Information (single IP or list from file)
+# @name:        Floating IP Information
+# @description: Look up a floating IP (or a list from a file) and show its project, port, and server
+# @mutates:     no
+# @tags:        neutron, floating-ip, port, server, lookup
 # ============================================================
 
 echo "=========================================="

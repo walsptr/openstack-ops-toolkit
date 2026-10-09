@@ -1,12 +1,15 @@
 #!/bin/bash
+# ============================================================
+# @name:        Assign User to Project
+# @description: Assign the member or admin role to a user on a project
+# @mutates:     yes
+# @requires:    admin
+# @tags:        keystone, role, user, project
+# ============================================================
 
 set -o errexit
 set -o nounset
 set -o pipefail
-
-# ============================================================
-# OpenStack Assign User to Project
-# ============================================================
 
 echo "========================================"
 echo "     Assign User to OpenStack Project"

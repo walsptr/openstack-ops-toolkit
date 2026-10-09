@@ -2,53 +2,55 @@
 
 A modular command-line toolkit for OpenStack administration, operations, and troubleshooting.
 
-All operational tasks are plain Bash scripts registered in `scripts.env`. The toolkit provides a
-**k9s-style terminal UI** to search, preview, and run those scripts with OpenStack credentials
-already loaded.
+All operational tasks are plain Bash scripts. Each script describes itself with a small
+**metadata header** (`@name`, `@description`, `@mutates`, …), and the toolkit discovers them
+automatically — no registration needed. A **k9s-style terminal UI** lets you search, preview,
+and run those scripts with OpenStack credentials already loaded.
 
 ```
-╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 🔎 scripts>   < 4/4 ─────────────────────────────────────────────────────────────────────────────────────  │
-│   Context:  admin-openrc.sh               <enter>   Run       <alt-p>   Preview          ___   ___  _____  │
-│   Cloud:    keystone.example.com:5000     <ctrl-e>  Source    <ctrl-d>  Preview down    / _ \ / _ \|_   _| │
-│   Region:   RegionOne                     <ctrl-r>  Reload    <ctrl-u>  Preview up     | (_) | (_) | | |   │
-│   User:     admin                         <ctrl-o>  Context   <esc>     Clear filter    \___/ \___/  |_|   │
-│   Project:  admin                         <?>       Help      <ctrl-c>  Quit                               │
-│   ──── Scripts(all)[4] ────                                                                                │
-│   NAME                       CATEGORY  DESCRIPTION                                                         │
-│ ▌ Floating IP Information    network   Get Floating IP Information (single IP or list from file)           │
-│ ▌ Instances Information      compute   OpenStack Instance Information                                      │
-│ ▌ Assign User to Project     identity  OpenStack Assign User to Project                                    │
-│ ▌ Import Volume from NetApp  volumes   Cinder Manage Volume                                                │
-│ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
-│ │ Floating IP Information                                                                          1/248 │ │
-│ │ ────────────────────────────────────────                                                               │ │
-│ │ Category : network                                                                                     │ │
-│ │ Path     : /opt/openstack-ops-toolkit/network/get-float-ip-info.sh                                     │ │
-│ │ Lines    : 238                                                                                         │ │
-│ │                                                                                                        │ │
-│ │ Description:                                                                                           │ │
-│ │   Get Floating IP Information (single IP or list from file)                                            │ │
-│ │                                                                                                        │ │
-│ │ ──────────────── source ────────────────                                                               │ │
-│ │    1 #!/bin/bash                                                                                       │ │
-│ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 🔎 scripts>   < 4/4 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  │
+│   Context:  admin-openrc.sh               <enter>   Run       <alt-p>   Preview          ___   ___  _____                                          │
+│   Cloud:    keystone.example.com:5000     <ctrl-e>  Source    <ctrl-d>  Preview down    / _ \ / _ \|_   _|                                         │
+│   Region:   RegionOne                     <ctrl-r>  Reload    <ctrl-u>  Preview up     | (_) | (_) | | |                                           │
+│   User:     admin                         <ctrl-o>  Context   <esc>     Clear filter    \___/ \___/  |_|                                           │
+│   Project:  admin                         <?>       Help      <ctrl-c>  Quit                                                                       │
+│   ──── Scripts(all)[4] ────                                                                                                                        │
+│   NAME                       CATEGORY  MUTATES  DESCRIPTION                                                   TAGS                                 │
+│   Instances Information      compute   no       Show instance name, project ID, and project name for an ins…  nova, server, instance, project, ··  │
+│ ▌ Assign User to Project     identity  yes      Assign the member or admin role to a user on a project        keystone, role, user, project        │
+│   Floating IP Information    network   no       Look up a floating IP (or a list from a file) and show its …  neutron, floating-ip, port, serve··  │
+│   Import Volume from NetApp  volumes   yes      Bring an existing NetApp volume under Cinder management (ci…  cinder, volume, netapp, manage, i··  │
+│ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ Assign User to Project                                                                                                                   1/126 │ │
+│ │ ────────────────────────────────────────                                                                                                       │ │
+│ │ Category : identity                                                                                                                            │ │
+│ │ Path     : /opt/openstack-ops-toolkit/identity/assign-user-to-project.sh                                                                       │ │
+│ │ Mutates  : ⚠️  yes — mengubah resource (konfirmasi sebelum dijalankan)                                                                         │ │
+│ │ Requires : admin                                                                                                                               │ │
+│ │ Tags     : keystone, role, user, project                                                                                                       │ │
+│ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Features
 
+- **Auto-discovery** — scripts are found by scanning the category directories and reading the
+  metadata header of each script. The script file is the single source of truth.
 - **k9s-style layout** — info panel (context, cloud, region, user, project), key hints, a titled
-  script table, and a detail pane.
-- **Fuzzy search** — type to search scripts by name, category, or description
+  script table (`NAME`, `CATEGORY`, `MUTATES`, `DESCRIPTION`, `TAGS`), and a preview pane.
+- **Fuzzy search** — type to search scripts by name, category, description, or tags
   (powered by [fzf](https://github.com/junegunn/fzf)).
-- **Keyboard navigation** — arrow keys to move, `Enter` to run, no mouse needed.
-- **Preview pane** — description, category, path, and syntax-highlighted source of the selected script.
+- **Safety marker** — scripts with `@mutates: yes` are highlighted, and the launcher asks for
+  confirmation before running them (in addition to the script's own confirmation).
+- **Preview pane** — category, path, mutates, requires, tags, description, and
+  syntax-highlighted source of the selected script.
 - **Credentials loaded once** — pick an OpenStack RC file at start; every script inherits the
   `OS_*` variables. Switch RC file anytime with `Ctrl-O`.
-- **Stay in the TUI** — after a script finishes you return to the list; the result (success or
-  exit code) is shown in the title bar.
-- **Simple extension** — add a script and one line in `scripts.env`; no code changes needed.
+- **Stay in the TUI** — after a script finishes you return to the list; the result (success,
+  exit code, or cancelled) is shown in the title bar.
+- **Optional local override** — `scripts.env` can rename, hide, or add scripts per server.
+- **`--list`** — print all scripts as a Markdown table (for documentation and CI).
 - **Graceful fallback** — without fzf, a plain numbered menu with text filtering is used.
 
 ## Requirements
@@ -82,7 +84,7 @@ sudo apt-get install -y python3-openstackclient fzf bat
 ```
 
 > What each script can do depends on the role of the OpenStack credentials you load.
-> Some scripts (e.g. assigning roles, importing volumes) require an **admin** role.
+> The `@requires` metadata (shown in the preview pane) tells you what a script needs.
 
 ## Installation
 
@@ -97,18 +99,19 @@ The installer:
 1. Checks all requirements **before** escalating to root (so an `openstack` client installed in
    your user `PATH` or a virtualenv is detected) and prints install hints for anything missing.
 2. Re-runs itself with `sudo` if needed.
-3. Copies the script directories (`compute/`, `identity/`, `network/`, `volumes/`) to
-   `/opt/openstack-ops-toolkit/`. If the repository is already located there, copying is skipped.
-4. Creates `/opt/openstack-ops-toolkit/scripts.env` from `scripts.env.example`. An existing
-   `scripts.env` is never overwritten — new entries from the example are offered to be appended.
+3. Discovers the scripts (same parser as the TUI) and copies every category directory that
+   contains a script with `@name` — plus `lib/` if present — to `/opt/openstack-ops-toolkit/`.
+   If the repository is already located there, copying is skipped.
+4. Never creates or modifies `scripts.env`. If an existing `scripts.env` contains entries that are
+   now redundant (same path and same name as discovered), it prints them so you can remove them.
 5. Installs the command to `/usr/local/bin/openstack-ops-toolkit`.
 
 Installer options:
 
 | Option | Description |
 |---|---|
-| `-y`, `--yes` | Non-interactive: automatically append new entries to `scripts.env` |
 | `--skip-checks` | Skip the requirement check (not recommended) |
+| `-y`, `--yes` | Deprecated, has no effect (kept for compatibility) |
 | `-h`, `--help` | Show help |
 
 To update, pull the latest changes and run `./install.sh` again.
@@ -128,18 +131,22 @@ with `openstack token issue` before the TUI opens.
 # Skip the RC prompt
 openstack-ops-toolkit --rc ~/admin-openrc.sh
 
-# Use a custom working directory (must contain scripts.env)
+# Use a custom working directory (scripts are discovered there)
 openstack-ops-toolkit --workdir /path/to/workdir
 
 # Plain numbered menu, no TUI
 openstack-ops-toolkit --no-fzf
+
+# Print the script list as a Markdown table (no RC file needed)
+openstack-ops-toolkit --list
 ```
 
 | Option | Description |
 |---|---|
-| `--workdir PATH` | Working directory containing `scripts.env` (default `/opt/openstack-ops-toolkit`) |
+| `--workdir PATH` | Directory to discover scripts in (default `/opt/openstack-ops-toolkit`); `scripts.env` there is optional |
 | `--rc FILE` | OpenStack RC file to load (skips the prompt) |
 | `--no-fzf` | Use the plain numbered menu |
+| `--list` | Print scripts (name, category, path, mutates, description) as a Markdown table and exit |
 | `-h`, `--help` | Show help |
 
 You can also run it directly from the repository with `bash main.sh --workdir .`.
@@ -150,11 +157,11 @@ Press `?` inside the TUI for the full list.
 
 | Key | Action |
 |---|---|
-| *type* | Search scripts (fuzzy; prefix with `'` for an exact match) |
+| *type* | Search scripts — name, category, description, tags (fuzzy; prefix with `'` for an exact match) |
 | `↑` / `↓` | Move selection |
-| `Enter` | Run the selected script |
+| `Enter` | Run the selected script (asks for confirmation first if `MUTATES` is `yes`) |
 | `Ctrl-E` | View the full script source in the pager |
-| `Ctrl-R` | Reload the script list from `scripts.env` |
+| `Ctrl-R` | Re-discover scripts (and re-read `scripts.env`) |
 | `Ctrl-O` | Switch OpenStack RC file (context) |
 | `Alt-P` | Show / hide the preview pane |
 | `Ctrl-D` / `Ctrl-U` | Scroll the preview pane |
@@ -164,54 +171,94 @@ Press `?` inside the TUI for the full list.
 
 ## Operational scripts
 
-| Script | Description | Modifies resources |
+Generated with `bash main.sh --workdir . --list`:
+
+| Name | Category | Path | Mutates | Description |
+|---|---|---|---|---|
+| Instances Information | compute | `compute/get-instance-info.sh` | no | Show instance name, project ID, and project name for an instance ID |
+| Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
+| Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file) and show its project, port, and server |
+| Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
+
+## Adding a script
+
+Create a Bash script in a category directory with a metadata header **directly after the
+shebang** — that's all. No registration in `scripts.env` is needed.
+
+```bash
+#!/bin/bash
+# ============================================================
+# @name:        List Orphan Ports
+# @description: List ports that are not attached to any device
+# @mutates:     no
+# @requires:    admin
+# @tags:        neutron, port, cleanup
+# ============================================================
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# ... script ...
+```
+
+| Tag | Required | Description |
 |---|---|---|
-| `network/get-float-ip-info.sh` | Look up a floating IP (or a list from a file) and show its project, port, and server; optionally save results to a file | No |
-| `compute/get-instance-info.sh` | Show instance name, project ID, and project name for an instance ID | No |
-| `identity/assign-user-to-project.sh` | Assign the `member` or `admin` role to a user on a project | **Yes** (with confirmation) |
-| `volumes/import-vol-from-netapp.sh` | Bring an existing NetApp volume under Cinder management (`cinder manage`), choosing volume type and pool interactively | **Yes** (with confirmation) |
+| `@name` | **Yes** | Display name. Files without `@name` are treated as helpers and not listed. |
+| `@description` | No | One line. Fallback: the first comment line of the header block. |
+| `@mutates` | No | `yes` / `no` (default `no`). Use `yes` for any script that changes resources — the launcher then asks for confirmation. The script must still ask for its own confirmation. |
+| `@requires` | No | Free text, e.g. `admin`, `admin, cinder`. |
+| `@tags` | No | Comma-separated keywords, included in search. |
 
-### Adding a script
+Rules:
 
-1. Create a Bash script in a category directory, e.g. `compute/list-orphan-ports.sh`.
-   The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
-   The category shown in the TUI is the directory name.
-2. Start the script with a comment block — its first line is shown in the DESCRIPTION column
-   and the whole block in the preview pane:
+- Only the header block is parsed (comment lines after the shebang, until the first line of code).
+- The category is the first directory of the path, so `network/floating-ip/release.sh` belongs to
+  `network`. A new category is just a new directory.
+- Files in `lib/` and hidden directories are never listed — put shared helpers in `lib/`.
+- The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
 
-   ```bash
-   #!/bin/bash
+Then:
 
-   # ============================================================
-   # List ports that are not attached to any device
-   # ============================================================
-   ```
+1. Press `Ctrl-R` in the TUI (or run `bash main.sh --workdir . --list`) to check it is discovered.
+2. Re-run `./install.sh` to deploy it.
+3. Regenerate the table in [Operational scripts](#operational-scripts) with `--list`.
 
-3. Register it in `scripts.env.example` (and in your `scripts.env`):
+## Local override: `scripts.env` (optional)
 
-   ```
-   List Orphan Ports,compute/list-orphan-ports.sh
-   ```
+`scripts.env` in the workdir is an optional, per-server override file (not tracked by git).
+See `scripts.env.example`.
 
-   Format: `Display Name,path` — one per line. Relative paths resolve against the workdir;
-   blank lines and lines starting with `#` are ignored.
+| Line | Effect |
+|---|---|
+| `Display Name,path` | If `path` is a discovered script: change its display name. Otherwise: add it as a custom entry (category `custom`), e.g. a script outside the repo. |
+| `!path` | Hide the script. |
+| `# comment` | Ignored (trailing comments too). |
 
-4. Re-run `./install.sh` to deploy it, then press `Ctrl-R` in the TUI (or restart it).
+```
+Floating IP Lookup,network/get-float-ip-info.sh          # rename
+!volumes/import-vol-from-netapp.sh                       # hide on this server
+Site Backup Check,/usr/local/sbin/check-backup.sh        # custom script
+```
+
+Relative paths resolve against the workdir. Existing `scripts.env` files in the old format
+(one `Name,path` line per script) keep working without duplicates.
 
 ## Project structure
 
 ```
 .
-├── main.sh                 # Entry point: k9s-style TUI script launcher
+├── main.sh                 # Entry point: k9s-style TUI script launcher (discovery, --list)
 ├── install.sh              # Installer with requirement checks
-├── scripts.env.example     # Script registry template ("Name,path")
+├── scripts.env.example     # Example of the optional local override file
+├── CLAUDE.md               # Architecture and contribution guide
 ├── compute/                # Compute (Nova) scripts
 ├── identity/               # Identity (Keystone) scripts
 ├── network/                # Network (Neutron) scripts
 └── volumes/                # Block storage (Cinder) scripts
 ```
 
-`scripts.env` is local configuration and is not tracked by git.
+Category directories are discovered dynamically; add a directory to add a category.
 
 ## Troubleshooting
 
@@ -219,6 +266,8 @@ Press `?` inside the TUI for the full list.
 |---|---|
 | `fzf tidak ditemukan` | Install fzf ≥ 0.20.0, or use `--no-fzf` |
 | `Gagal melakukan autentikasi OpenStack` | Check the RC file: run `source <rc> && openstack token issue` manually |
-| `File scripts.env tidak ditemukan!` | Run `./install.sh`, or pass `--workdir` pointing to a directory containing `scripts.env` |
-| A script is missing from the list | Check its entry in `scripts.env` (`Name,path`), then press `Ctrl-R` |
-| DESCRIPTION shows `⚠️ script tidak ditemukan` | The path in `scripts.env` does not exist relative to the workdir |
+| `Tidak ada script ber-@name di workdir` | The workdir has no discoverable scripts: run `./install.sh`, or point `--workdir` to the toolkit directory |
+| A new script is missing from the list | Check that `@name` is in the header block directly after the shebang (not after `set -o ...` or code), the file ends in `.sh`, and it is not in `lib/` or a hidden directory; then press `Ctrl-R` |
+| A script appears under `custom` | It is added by `scripts.env` with a path that discovery did not find — check the path |
+| DESCRIPTION shows `⚠️ script tidak ditemukan` | A `scripts.env` entry points to a file that does not exist |
+| Installer reports redundant `scripts.env` entries | They are now discovered automatically; remove those lines (optional) |
