@@ -1,56 +1,64 @@
 # OpenStack Ops Toolkit
 
 A modular command-line toolkit for OpenStack administration, operations, and troubleshooting.
-It provides a **k9s-style terminal UI** for browsing OpenStack resources and a launcher for
-reusable operational scripts — all from a single command.
+
+All operational tasks are plain Bash scripts registered in `scripts.env`. The toolkit provides a
+**k9s-style terminal UI** to search, preview, and run those scripts with OpenStack credentials
+already loaded.
 
 ```
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ servers>   < 3/3 (0) ────────────────────────────────────────────────────────────────────────────────────  │
-│   ⎈ admin-openrc.sh  👤 admin  📁 admin  🌍 RegionOne  https://keystone.example.com:5000/v3                │
-│   📋 Servers  all-projects: off                                                                            │
-│   <enter> ports  <ctrl-e> describe  <ctrl-r> refresh  <ctrl-a> all-proj  <:> views  <?> help  <esc> back   │
-│   <alt-s> start  <alt-x> stop  <alt-b> reboot  <alt-l> console-log  <alt-u> console-url  <tab> mark        │
-│   ID             NAME       STATUS   NETWORKS                        IMAGE         FLAVOR                  │
-│ ▌ 11111111-aaaa  web-01     ACTIVE   private=10.0.0.5, 203.0.113.10  ubuntu-22.04  m1.small                │
-│ ▌ 22222222-bbbb  db-01      SHUTOFF  private=10.0.0.6                rocky-9       m1.large                │
-│ ▌ 33333333-cccc  broken-vm  ERROR                                                  m1.tiny                 │
-│                                                                                                            │
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 🔎 scripts>   < 4/4 ─────────────────────────────────────────────────────────────────────────────────────  │
+│   Context:  admin-openrc.sh               <enter>   Run       <alt-p>   Preview          ___   ___  _____  │
+│   Cloud:    keystone.example.com:5000     <ctrl-e>  Source    <ctrl-d>  Preview down    / _ \ / _ \|_   _| │
+│   Region:   RegionOne                     <ctrl-r>  Reload    <ctrl-u>  Preview up     | (_) | (_) | | |   │
+│   User:     admin                         <ctrl-o>  Context   <esc>     Clear filter    \___/ \___/  |_|   │
+│   Project:  admin                         <?>       Help      <ctrl-c>  Quit                               │
+│   ──── Scripts(all)[4] ────                                                                                │
+│   NAME                       CATEGORY  DESCRIPTION                                                         │
+│ ▌ Floating IP Information    network   Get Floating IP Information (single IP or list from file)           │
+│ ▌ Instances Information      compute   OpenStack Instance Information                                      │
+│ ▌ Assign User to Project     identity  OpenStack Assign User to Project                                    │
+│ ▌ Import Volume from NetApp  volumes   Cinder Manage Volume                                                │
 │ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
-│ │ id: 11111111-aaaa                                                                                      │ │
-│ │ name: web-01                                                                                           │ │
-│ │ status: ACTIVE                                                                                         │ │
-│ │ flavor: m1.small                                                                                       │ │
+│ │ Floating IP Information                                                                          1/248 │ │
+│ │ ────────────────────────────────────────                                                               │ │
+│ │ Category : network                                                                                     │ │
+│ │ Path     : /opt/openstack-ops-toolkit/network/get-float-ip-info.sh                                     │ │
+│ │ Lines    : 238                                                                                         │ │
+│ │                                                                                                        │ │
+│ │ Description:                                                                                           │ │
+│ │   Get Floating IP Information (single IP or list from file)                                            │ │
+│ │                                                                                                        │ │
+│ │ ──────────────── source ────────────────                                                               │ │
+│ │    1 #!/bin/bash                                                                                       │ │
 │ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Features
 
-- **Resource browser** — servers, volumes, floating IPs, networks, subnets, ports, routers,
-  security groups, images, flavors, projects, users, hypervisors, and compute / network / volume
-  services, rendered as aligned tables with color-coded status.
-- **Fuzzy filtering** — type to filter any view (powered by [fzf](https://github.com/junegunn/fzf)).
-- **Command palette** — press `:` to jump to any view (`:hv`, `:fip`, `:vol`, `:sg`, …).
-- **Drill-down navigation** — `Enter` on a project shows its servers, on a hypervisor shows the
-  servers on that host, on a server / network / router shows its ports. `Esc` goes back.
-- **Live describe pane** — `openstack … show` output for the highlighted resource, cached per session.
-- **Server actions** — start, stop, soft reboot (single or multi-select with `Tab`), console log,
-  and console URL. State-changing actions always ask for confirmation.
-- **Context switching** — `:ctx` switches to another OpenStack RC file (cloud / project / user).
-- **Ops scripts launcher** — run the toolkit's operational scripts from the `scripts` view, with
-  a preview of each script's description and source.
-- **Graceful fallback** — without fzf, a plain numbered script menu is used.
+- **k9s-style layout** — info panel (context, cloud, region, user, project), key hints, a titled
+  script table, and a detail pane.
+- **Fuzzy search** — type to search scripts by name, category, or description
+  (powered by [fzf](https://github.com/junegunn/fzf)).
+- **Keyboard navigation** — arrow keys to move, `Enter` to run, no mouse needed.
+- **Preview pane** — description, category, path, and syntax-highlighted source of the selected script.
+- **Credentials loaded once** — pick an OpenStack RC file at start; every script inherits the
+  `OS_*` variables. Switch RC file anytime with `Ctrl-O`.
+- **Stay in the TUI** — after a script finishes you return to the list; the result (success or
+  exit code) is shown in the title bar.
+- **Simple extension** — add a script and one line in `scripts.env`; no code changes needed.
+- **Graceful fallback** — without fzf, a plain numbered menu with text filtering is used.
 
 ## Requirements
 
 | Requirement | Notes |
 |---|---|
 | Bash ≥ 4 | |
-| [python-openstackclient](https://docs.openstack.org/python-openstackclient/) | `openstack` CLI |
-| Python 3 | Used to format resource tables (already required by the OpenStack client) |
+| [python-openstackclient](https://docs.openstack.org/python-openstackclient/) | `openstack` CLI, used by the scripts and to verify credentials |
 | [fzf](https://github.com/junegunn/fzf) ≥ 0.20.0 | Terminal UI |
-| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `cut`, `realpath`, `install` |
+| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install` |
 | `sudo` | Only for installation, when not running as root |
 
 Optional:
@@ -58,8 +66,8 @@ Optional:
 | Optional | Used for |
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
-| [bat](https://github.com/sharkdp/bat) | Syntax highlighting in previews |
-| `less` (or `$PAGER`) | Full describe / console log / source viewer |
+| [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
+| `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
 
 Example on RHEL / Rocky / Fedora:
 
@@ -73,8 +81,8 @@ Example on Ubuntu / Debian:
 sudo apt-get install -y python3-openstackclient fzf bat
 ```
 
-> The OpenStack credentials you use determine what you can see and do. Many views
-> (hypervisors, services, all-projects listings) and some scripts require an **admin** role.
+> What each script can do depends on the role of the OpenStack credentials you load.
+> Some scripts (e.g. assigning roles, importing volumes) require an **admin** role.
 
 ## Installation
 
@@ -112,20 +120,18 @@ openstack-ops-toolkit
 ```
 
 On start you pick an OpenStack RC file (candidates matching `*openrc*`, `*rc.sh`, or `*-rc` in
-your home directory and the workdir are listed; you can also type a path). The credentials are
-verified with `openstack token issue` before the TUI opens.
+your home directory and the workdir are listed; you can also type a path). Lines containing
+`PASSWORD`, `SECRET`, or `TOKEN` are hidden in the picker preview. The credentials are verified
+with `openstack token issue` before the TUI opens.
 
 ```bash
 # Skip the RC prompt
 openstack-ops-toolkit --rc ~/admin-openrc.sh
 
-# Start in a specific view
-openstack-ops-toolkit --rc ~/admin-openrc.sh --view hypervisors
-
 # Use a custom working directory (must contain scripts.env)
 openstack-ops-toolkit --workdir /path/to/workdir
 
-# Plain numbered script menu, no TUI
+# Plain numbered menu, no TUI
 openstack-ops-toolkit --no-fzf
 ```
 
@@ -133,8 +139,7 @@ openstack-ops-toolkit --no-fzf
 |---|---|
 | `--workdir PATH` | Working directory containing `scripts.env` (default `/opt/openstack-ops-toolkit`) |
 | `--rc FILE` | OpenStack RC file to load (skips the prompt) |
-| `--view NAME` | Initial view (default `servers`) |
-| `--no-fzf` | Use the plain numbered script menu |
+| `--no-fzf` | Use the plain numbered menu |
 | `-h`, `--help` | Show help |
 
 You can also run it directly from the repository with `bash main.sh --workdir .`.
@@ -145,51 +150,17 @@ Press `?` inside the TUI for the full list.
 
 | Key | Action |
 |---|---|
-| *type* | Fuzzy filter (prefix with `'` for an exact match) |
+| *type* | Search scripts (fuzzy; prefix with `'` for an exact match) |
 | `↑` / `↓` | Move selection |
-| `Tab` / `Shift-Tab` | Mark rows (multi-select for bulk actions) |
-| `Enter` | Drill down / describe / run script |
-| `Esc` | Back to the previous view |
-| `:` | Command palette (switch view, `ctx`, `help`, `quit`) |
+| `Enter` | Run the selected script |
+| `Ctrl-E` | View the full script source in the pager |
+| `Ctrl-R` | Reload the script list from `scripts.env` |
+| `Ctrl-O` | Switch OpenStack RC file (context) |
+| `Alt-P` | Show / hide the preview pane |
+| `Ctrl-D` / `Ctrl-U` | Scroll the preview pane |
+| `Esc` | Clear the search filter |
 | `?` | Help |
-| `Ctrl-C` | Quit |
-| `Ctrl-R` | Refresh from the API |
-| `Ctrl-A` | Toggle `--all-projects` (servers, volumes) |
-| `Ctrl-E` | Full describe in pager (script source in the `scripts` view) |
-| `Alt-P` | Show / hide the describe pane |
-| `Ctrl-D` / `Ctrl-U` | Scroll the describe pane |
-
-Server view actions:
-
-| Key | Action |
-|---|---|
-| `Alt-S` | Start selected server(s) — with confirmation |
-| `Alt-X` | Stop selected server(s) — with confirmation |
-| `Alt-B` | Soft reboot selected server(s) — with confirmation |
-| `Alt-L` | Console log |
-| `Alt-U` | Console URL |
-
-### Views
-
-| View | Palette aliases | Enter (drill-down) |
-|---|---|---|
-| `servers` | `server`, `srv`, `vm`, `instances` | Ports of the server |
-| `volumes` | `volume`, `vol` | Describe |
-| `floatingips` | `fip`, `floating` | Describe |
-| `networks` | `network`, `net` | Ports on the network |
-| `subnets` | `subnet` | Describe |
-| `ports` | `port` | Describe |
-| `routers` | `router`, `rt` | Ports of the router |
-| `secgroups` | `sg`, `secgroup`, `security` | Describe |
-| `images` | `image`, `img` | Describe |
-| `flavors` | `flavor`, `fl` | Describe |
-| `projects` | `project`, `proj`, `tenant` | Servers in the project |
-| `users` | `user`, `usr` | Describe |
-| `hypervisors` | `hypervisor`, `hv`, `host` | Servers on the host |
-| `compute-services` | `svc`, `nova`, `compute` | — |
-| `network-agents` | `agents`, `neutron` | Describe |
-| `volume-services` | `cinder`, `vsvc` | — |
-| `scripts` | `script`, `run`, `ops` | Run the script |
+| `Ctrl-C` | Quit (while a script runs: stop that script and return to the TUI) |
 
 ## Operational scripts
 
@@ -204,7 +175,9 @@ Server view actions:
 
 1. Create a Bash script in a category directory, e.g. `compute/list-orphan-ports.sh`.
    The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
-2. Start the script with a comment block — it is shown as the description in the preview:
+   The category shown in the TUI is the directory name.
+2. Start the script with a comment block — its first line is shown in the DESCRIPTION column
+   and the whole block in the preview pane:
 
    ```bash
    #!/bin/bash
@@ -223,13 +196,13 @@ Server view actions:
    Format: `Display Name,path` — one per line. Relative paths resolve against the workdir;
    blank lines and lines starting with `#` are ignored.
 
-4. Re-run `./install.sh` to deploy it. `scripts.env` is re-read every time the menu opens.
+4. Re-run `./install.sh` to deploy it, then press `Ctrl-R` in the TUI (or restart it).
 
 ## Project structure
 
 ```
 .
-├── main.sh                 # Entry point: TUI / script launcher
+├── main.sh                 # Entry point: k9s-style TUI script launcher
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Script registry template ("Name,path")
 ├── compute/                # Compute (Nova) scripts
@@ -240,24 +213,12 @@ Server view actions:
 
 `scripts.env` is local configuration and is not tracked by git.
 
-## Notes
-
-- **Safety:** there is no delete action in the TUI. Start / stop / reboot and the
-  state-changing scripts always show the target and context and ask for confirmation.
-- **Credentials:** RC files are only sourced locally; the RC picker preview hides lines
-  containing `PASSWORD`, `SECRET`, or `TOKEN`.
-- **Performance:** every list and describe is an `openstack` CLI call (typically 1–2 seconds).
-  Describe results are cached for the session; `Ctrl-R` refreshes.
-- **Refresh:** views do not auto-refresh; press `Ctrl-R`.
-- **Interrupting:** `Ctrl-C` while a script or action is running stops only that process and
-  returns to the TUI.
-
 ## Troubleshooting
 
 | Problem | Solution |
 |---|---|
 | `fzf tidak ditemukan` | Install fzf ≥ 0.20.0, or use `--no-fzf` |
 | `Gagal melakukan autentikasi OpenStack` | Check the RC file: run `source <rc> && openstack token issue` manually |
-| A view shows a red error row | The underlying `openstack … list` call failed (missing permission or unavailable service); the error message is shown in the row |
-| A column is empty | Column names differ in some older `python-openstackclient` versions |
-| Hypervisors / services views fail | These require an admin role |
+| `File scripts.env tidak ditemukan!` | Run `./install.sh`, or pass `--workdir` pointing to a directory containing `scripts.env` |
+| A script is missing from the list | Check its entry in `scripts.env` (`Name,path`), then press `Ctrl-R` |
+| DESCRIPTION shows `⚠️ script tidak ditemukan` | The path in `scripts.env` does not exist relative to the workdir |

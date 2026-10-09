@@ -121,13 +121,6 @@ check_requirements() {
             "$(pkg_hint python3-openstackclient python3-openstackclient)  atau  pip install python-openstackclient"
     fi
 
-    # python3 (formatter tabel resource view di TUI)
-    if command -v python3 >/dev/null 2>&1; then
-        req_ok "python3" "$(python3 --version 2>&1 | awk '{print $2}')"
-    else
-        req_missing "python3" "tidak ditemukan" "$(pkg_hint python3 python3)"
-    fi
-
     # fzf
     if command -v fzf >/dev/null 2>&1; then
         version="$(fzf --version 2>/dev/null | awk '{print $1}')"
@@ -146,12 +139,12 @@ check_requirements() {
     local tool
     local missing_core=()
 
-    for tool in awk sed grep find sort cut realpath install; do
+    for tool in awk sed grep find sort head wc basename dirname realpath install; do
         command -v "$tool" >/dev/null 2>&1 || missing_core+=("$tool")
     done
 
     if (( ${#missing_core[@]} == 0 )); then
-        req_ok "core utils" "awk sed grep find sort cut realpath install"
+        req_ok "core utils" "awk sed grep find sort head wc basename dirname realpath install"
     else
         req_missing "core utils" "tidak ditemukan: ${missing_core[*]}" \
             "$(pkg_hint "coreutils findutils gawk sed grep" "coreutils findutils gawk sed grep")"
