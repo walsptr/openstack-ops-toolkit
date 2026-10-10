@@ -11,6 +11,14 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Logging terpusat (lib/logging.sh)
+# shellcheck source=../lib/logging.sh
+if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/logging.sh" 2>/dev/null; then
+    echo "❌ lib/logging.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+log_init
+
 echo "=========================================="
 echo "       OpenStack Instance Info"
 echo "=========================================="
@@ -31,10 +39,12 @@ case "$MODE" in
 
         if [[ -z "$INSTANCE_ID" ]]; then
             echo "❌ Instance ID tidak boleh kosong."
+            log_error -q "input tidak valid: Instance ID kosong"
             exit 1
         fi
 
         INSTANCE_IDS=("$INSTANCE_ID")
+        log_event INPUT mode=single "instance_id=$INSTANCE_ID"
         ;;
 
     2)
@@ -42,6 +52,7 @@ case "$MODE" in
 
         if [[ ! -f "$LIST_FILE" || ! -r "$LIST_FILE" ]]; then
             echo "❌ File '$LIST_FILE' tidak ditemukan atau tidak bisa dibaca."
+            log_error -q "input file tidak ditemukan atau tidak bisa dibaca: $LIST_FILE"
             exit 1
         fi
 
@@ -60,6 +71,7 @@ case "$MODE" in
 
         if [[ ${#INSTANCE_IDS[@]} -eq 0 ]]; then
             echo "❌ Tidak ada Instance ID di dalam file."
+            log_error -q "tidak ada Instance ID di dalam file: $LIST_FILE"
             exit 1
         fi
 
@@ -68,15 +80,18 @@ case "$MODE" in
         # Create the file without overwriting an existing one
         if ! ( set -o noclobber; : > "$OUTPUT_FILE" ) 2>/dev/null; then
             echo "❌ Gagal membuat output file: $OUTPUT_FILE"
+            log_error -q "gagal membuat output file: $OUTPUT_FILE"
             exit 1
         fi
 
         echo "Instance ID,Instance Name,Project ID,Project Name,Domain ID,Domain Name" >> "$OUTPUT_FILE"
         echo "Output akan disimpan ke: $OUTPUT_FILE"
+        log_event INPUT mode=list "input_file=$LIST_FILE" "count=${#INSTANCE_IDS[@]}" "output_file=$OUTPUT_FILE"
         ;;
 
     *)
         echo "❌ Pilihan tidak valid."
+        log_error -q "input tidak valid: mode '$MODE'"
         exit 1
         ;;
 
@@ -171,6 +186,7 @@ for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
     if ! get_instance_info "$INSTANCE_ID"; then
 
         echo "❌ Gagal mendapatkan informasi instance (tidak ditemukan atau tidak ada akses)."
+        log_result "resource=$INSTANCE_ID" action=lookup result=FAILED msg="tidak ditemukan atau tidak ada akses"
 
         if [[ -n "$OUTPUT_FILE" ]]; then
             csv_row "$INSTANCE_ID" "NOT FOUND" "-" "-" "-" "-" >> "$OUTPUT_FILE"
@@ -190,6 +206,9 @@ for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
     if [[ -n "$OUTPUT_FILE" ]]; then
         csv_row "$INSTANCE_ID" "$INSTANCE_NAME" "$PROJECT_ID" "$PROJECT_NAME" "$DOMAIN_ID" "$DOMAIN_NAME" >> "$OUTPUT_FILE"
     fi
+
+    log_result "resource=$INSTANCE_ID" action=lookup result=SUCCESS \
+        "project_id=$PROJECT_ID" "domain_id=$DOMAIN_ID"
 
     SUCCESS=$((SUCCESS + 1))
 
@@ -212,6 +231,8 @@ if [[ -n "$OUTPUT_FILE" ]]; then
 fi
 
 echo "=========================================="
+
+log_event SUMMARY "total=$TOTAL" "success=$SUCCESS" "failed=$FAILED" "output_file=${OUTPUT_FILE:--}"
 
 # Single mode keeps the old behavior: non-zero exit when the lookup failed
 if [[ -z "$OUTPUT_FILE" && $FAILED -gt 0 ]]; then

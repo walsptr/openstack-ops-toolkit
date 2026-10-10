@@ -22,10 +22,12 @@ The TUI (`main.sh`) only borrows the **look and feel** of k9s (info panel, key h
 
 ```
 main.sh               Entry point: k9s-style TUI launcher (fzf), --no-fzf fallback, --list
-install.sh            Installer: requirement checks, copies category dirs, installs command
+install.sh            Installer: requirement checks, copies category dirs + lib/, creates log/, installs command
 scripts.env.example   Example of the OPTIONAL local override file
 <category>/*.sh       Operational scripts (identity/, network/, servers/, volumes/, ...)
-lib/                  (optional) shared helpers for scripts — never listed in the TUI
+lib/                  Shared helpers for scripts — never listed in the TUI
+lib/logging.sh        Mandatory logging library (sourced by every script and by main.sh)
+log/                  Runtime logs (not tracked by git): toolkit.log + log/<category>/<script>-YYYYMMDD.log
 ```
 
 ### Script discovery (single source of truth)
@@ -91,8 +93,24 @@ Parsing rules:
 3. If the script creates, modifies, or deletes any resource: set `@mutates: yes` **and** the script must ask for its own confirmation (y/N) before the change. The launcher confirmation is an extra safeguard, not a replacement.
 4. Set `@requires` when the script needs an admin role or an extra client (e.g. `cinder`).
 5. Use the OpenStack credentials already loaded by the launcher (`OS_*` variables); never ask for or print secrets.
-6. Run the checks in the Testing section.
-7. Update the "Operational scripts" table in `README.md` from `bash main.sh --workdir . --list` (run from a clean checkout without `scripts.env`).
+6. Add logging: source `lib/logging.sh`, call `log_init`, log inputs, and (for `@mutates: yes`) `log_run` + `log_result` per resource including `DECLINED`/`SKIPPED` — see "Logging (mandatory)".
+7. Run the checks in the Testing section.
+8. Update the "Operational scripts" table in `README.md` from `bash main.sh --workdir . --list` (run from a clean checkout without `scripts.env`).
+
+## Logging (mandatory)
+
+Every operational script logs through `lib/logging.sh`. Rules:
+
+* **Every new script must source `lib/logging.sh` and call `log_init`**, right after the `set -o ...` lines, with the standard snippet (see `README.md` → Adding a script). If the library is missing the script exits with a clear error.
+* **Scripts that change resources (`@mutates: yes`) must call `log_result` for every resource**, for every outcome — including `DECLINED` (operator answered no at the script's confirmation) and `SKIPPED`. Run the changing command through `log_run` so the command (`CMD`) and its stderr (`$LOG_LAST_ERROR`, used as `msg=` on `FAILED`) are logged.
+* **Valid `result` values:** `SUCCESS`, `FAILED`, `SKIPPED`, `DECLINED`, `ABORTED`. Anything else is logged as `FAILED` with a warning.
+* Log user input with `log_event INPUT key=value ...` (IDs, IPs, names, input file paths). Read-only scripts log their queries (`log_result ... action=lookup`) and a `SUMMARY`, not the full output.
+* When the script already printed an error/warning, log it with `log_error -q` / `log_warn -q` so terminal output does not change.
+* **Never log secrets:** no `OS_PASSWORD`, tokens, application credential secrets, or any variable containing `PASSWORD`, `SECRET`, or `TOKEN` (the library also redacts their values as a safety net — do not rely on it).
+* **Never `tee` the whole script output** (or wrap scripts in `tee` in `main.sh`): it breaks interactive prompts, colors, and fzf. Log explicitly.
+* Do not set your own `EXIT`/`INT`/`TERM` trap in a script — it replaces the library's `START`/`END` trap.
+* **Do not hardcode log paths or category names.** The log directory comes from `OSOPS_LOG_DIR` / `LOG_DIR` / `<toolkit root>/log` (with the XDG fallback); the category is derived from the script path. Logging failures must never fail a script.
+* Line format: `<ISO8601+TZ> <LEVEL> run=<run_id> user=<operator> <EVENT> key=value ...`. `main.sh` passes `OSOPS_RUN_ID` so `toolkit.log` and the script log share the `run_id`.
 
 ## Development Standards
 
@@ -113,6 +131,7 @@ Parsing rules:
 * Do not register scripts that live inside the repo in `scripts.env` — use the metadata header. `scripts.env` is only for local renames, hiding, and scripts outside the repo.
 * Do not hardcode the list of categories (`identity network servers volumes`) in `main.sh`, `install.sh`, or docs logic.
 * Do not add OpenStack resource views or actions to the TUI; add a script instead.
+* Do not log secrets, do not `tee` whole script output, and do not hardcode log paths or category names.
 * Do not change business logic of operational scripts when only metadata or documentation is requested.
 
 ## Development Workflow
@@ -132,12 +151,14 @@ Do not modify unrelated components or introduce unnecessary abstractions.
 Validate changes using appropriate syntax checks, tests, and representative usage scenarios:
 
 ```bash
-bash -n main.sh install.sh */*.sh          # syntax
-shellcheck main.sh install.sh */*.sh        # if available
+bash -n main.sh install.sh */*.sh          # syntax (includes lib/*.sh)
+shellcheck -x main.sh install.sh */*.sh     # if available
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)
 ```
+
+Logging checks: after running scripts, inspect `./log/<category>/*.log` and `./log/toolkit.log` (format, `run_id` shared with `toolkit.log`); set `OSOPS_LOG_DIR` to a read-only directory to test the fallback warning; grep the log directory for the test RC file's `OS_PASSWORD` value (must return nothing).
 
 Override behavior can be tested with a temporary workdir containing a `scripts.env` (rename, `!path`, custom absolute path, old format). The TUI needs an interactive terminal; tmux (`send-keys` / `capture-pane`) works for scripted checks. A stub `openstack` command in `PATH` avoids touching a real cloud.
 

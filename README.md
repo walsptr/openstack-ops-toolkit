@@ -52,6 +52,9 @@ and run those scripts with OpenStack credentials already loaded.
 - **Optional local override** — `scripts.env` can rename, hide, or add scripts per server.
 - **`--list`** — print all scripts as a Markdown table (for documentation and CI).
 - **Graceful fallback** — without fzf, a plain numbered menu with text filtering is used.
+- **Audit logging** — every run is logged (who, which script, which resource, which OpenStack
+  context, result) per category under `log/`, with a `run_id` to trace one execution. Secrets are
+  never logged. See [Logging](#logging).
 
 ## Requirements
 
@@ -60,7 +63,7 @@ and run those scripts with OpenStack credentials already loaded.
 | Bash ≥ 4 | |
 | [python-openstackclient](https://docs.openstack.org/python-openstackclient/) | `openstack` CLI, used by the scripts and to verify credentials |
 | [fzf](https://github.com/junegunn/fzf) ≥ 0.20.0 | Terminal UI |
-| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install` |
+| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install`, `date`, `mktemp` |
 | `sudo` | Only for installation, when not running as root |
 
 Optional:
@@ -92,6 +95,10 @@ sudo apt-get install -y python3-openstackclient fzf bat
 git clone https://github.com/walsptr/openstack-ops-toolkit.git
 cd openstack-ops-toolkit
 ./install.sh        # or: bash install.sh
+
+# Recommended when several non-root operators share the toolkit:
+sudo groupadd osops && sudo usermod -aG osops <user>   # once; users re-login afterwards
+./install.sh --log-group osops
 ```
 
 The installer:
@@ -104,12 +111,16 @@ The installer:
    If the repository is already located there, copying is skipped.
 4. Never creates or modifies `scripts.env`. If an existing `scripts.env` contains entries that are
    now redundant (same path and same name as discovered), it prints them so you can remove them.
-5. Installs the command to `/usr/local/bin/openstack-ops-toolkit`.
+5. Creates `log/` and one `log/<category>/` per discovered category, owned by the log group with
+   mode `2775` (setgid, so new files inherit the group). Existing log files are never deleted or
+   overwritten; only their group and group-write bit are adjusted.
+6. Installs the command to `/usr/local/bin/openstack-ops-toolkit`.
 
 Installer options:
 
 | Option | Description |
 |---|---|
+| `--log-group GROUP` | Group that owns `log/` (must exist). Members can write logs. Default: the primary group of the user running `sudo` (`SUDO_USER`) |
 | `--skip-checks` | Skip the requirement check (not recommended) |
 | `-y`, `--yes` | Deprecated, has no effect (kept for compatibility) |
 | `-h`, `--help` | Show help |
@@ -180,6 +191,67 @@ Generated with `bash main.sh --workdir . --list`:
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
 
+## Logging
+
+Every script run is logged, whether it is started from the TUI or directly
+(`bash servers/get-instance-info.sh`).
+
+```
+/opt/openstack-ops-toolkit/log/
+├── toolkit.log                                   # launcher: sessions, runs, context switches
+├── identity/assign-user-to-project-20261010.log  # one file per script per day (append)
+├── network/get-float-ip-info-20261010.log
+├── servers/...
+└── volumes/...
+```
+
+The subdirectory is the script's category (first directory of its path); a new category gets its
+own subdirectory automatically. Scripts outside the toolkit (custom `scripts.env` entries) log to
+`log/custom/`.
+
+Line format — one event per line (newlines are escaped as `\n`):
+
+```
+<ISO 8601 time+TZ> <LEVEL> run=<run_id> user=<operator> <EVENT> key=value ...
+```
+
+```
+2026-10-10T15:29:06+07:00 INFO run=20261010T152906-303852-369a user=syawal START script=identity/assign-user-to-project.sh pid=303945 os_user=opsadmin os_project=admin os_region=RegionOne os_auth_host=keystone.example.com:5000
+2026-10-10T15:29:06+07:00 INFO run=20261010T152906-303852-369a user=syawal INPUT user=user9 project=demo role=admin
+2026-10-10T15:29:06+07:00 INFO run=20261010T152906-303852-369a user=syawal CMD openstack role add --user user9 --project demo admin
+2026-10-10T15:29:06+07:00 INFO run=20261010T152906-303852-369a user=syawal RESULT resource=user9 project=demo role=admin action=assign-role result=SUCCESS
+2026-10-10T15:29:06+07:00 INFO run=20261010T152906-303852-369a user=syawal END rc=0 duration=0s
+```
+
+- `user` is the real Linux user (`SUDO_USER` when run through `sudo`).
+- `START` records the OpenStack context: `OS_USERNAME`, `OS_PROJECT_NAME`, `OS_REGION_NAME`, and
+  the host of `OS_AUTH_URL`. Passwords, tokens, and application credential secrets are never
+  logged; the value of any environment variable whose name contains `PASSWORD`, `SECRET`, or
+  `TOKEN` is replaced by `***` if it ever appears in a message.
+- `RESULT` lines record the outcome per resource: `result` is one of `SUCCESS`, `FAILED`,
+  `SKIPPED`, `DECLINED` (the operator answered "no"), or `ABORTED`.
+- `END` records the exit code and duration (`signal=INT` when stopped with `Ctrl-C`).
+- Script output is not copied to the log; scripts log their inputs, commands, and results.
+
+Each run has a unique `run_id`. When started from the TUI, the same `run_id` is used in
+`toolkit.log` and in the script log, so one grep shows the whole run:
+
+```bash
+grep -r 'run=20261010T152906-303852-369a' /opt/openstack-ops-toolkit/log
+grep -rh 'result=FAILED' /opt/openstack-ops-toolkit/log/volumes/
+```
+
+Location:
+
+| Setting | Effect |
+|---|---|
+| default | `<workdir>/log` (`/opt/openstack-ops-toolkit/log`; `./log` with `--workdir .`, ignored by git) |
+| `OSOPS_LOG_DIR=/path` | Use another log directory |
+| fallback | If the log directory is not writable, one warning is shown and logs go to `${XDG_STATE_HOME:-$HOME/.local/state}/openstack-ops-toolkit/log`. If that fails too, logging is disabled. A logging failure never stops a script. |
+
+Retention is not automated yet; old daily files can be removed with e.g.
+`find /opt/openstack-ops-toolkit/log -name '*.log' -mtime +90 -delete`.
+
 ## Adding a script
 
 Create a Bash script in a category directory with a metadata header **directly after the
@@ -199,8 +271,30 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Logging terpusat (lib/logging.sh)
+# shellcheck source=../lib/logging.sh
+if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/logging.sh" 2>/dev/null; then
+    echo "❌ lib/logging.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+log_init
+
 # ... script ...
 ```
+
+Logging (required for every script, see [Logging](#logging)):
+
+| Function | Use |
+|---|---|
+| `log_init` | Once, right after sourcing. Logs `START`/`END` (exit code, duration) automatically. |
+| `log_event INPUT key=value ...` | User input (IDs, IPs, names, input file paths) — never secrets. |
+| `log_info` / `log_warn` / `log_error` | Free-text messages. `log_warn`/`log_error` also print to stderr; add `-q` when the script already printed the message. |
+| `log_run cmd args...` | Log and run an OpenStack command; its stderr is shown and kept in `$LOG_LAST_ERROR`. |
+| `log_result resource=<id> action=<action> result=<RESULT> [key=value ...]` | Outcome per resource. Required in scripts that change resources, including `DECLINED` / `SKIPPED`. |
+
+Do not set your own `EXIT`/`INT`/`TERM` trap (it replaces the logging trap) and do not pipe the
+whole script output through `tee`. In a nested category (`network/floating-ip/x.sh`) use `../..`
+in the source line.
 
 | Tag | Required | Description |
 |---|---|---|
@@ -215,7 +309,8 @@ Rules:
 - Only the header block is parsed (comment lines after the shebang, until the first line of code).
 - The category is the first directory of the path, so `network/floating-ip/release.sh` belongs to
   `network`. A new category is just a new directory.
-- Files in `lib/` and hidden directories are never listed — put shared helpers in `lib/`.
+- Files in `lib/` and hidden directories are never listed — put shared helpers in `lib/`
+  (e.g. `lib/logging.sh`).
 - The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
 
 Then:
@@ -252,6 +347,8 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Example of the optional local override file
 ├── CLAUDE.md               # Architecture and contribution guide
+├── lib/                    # Shared helpers for scripts (logging.sh), never listed in the TUI
+├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── identity/               # Identity (Keystone) scripts
 ├── network/                # Network (Neutron) scripts
 ├── servers/                # Server (Nova) scripts
@@ -271,3 +368,5 @@ Category directories are discovered dynamically; add a directory to add a catego
 | A script appears under `custom` | It is added by `scripts.env` with a path that discovery did not find — check the path |
 | DESCRIPTION shows `⚠️ script tidak ditemukan` | A `scripts.env` entry points to a file that does not exist |
 | Installer reports redundant `scripts.env` entries | They are now discovered automatically; remove those lines (optional) |
+| `Direktori log tidak bisa ditulis: ... — log dialihkan ke ...` | Your user cannot write to `log/`. Add the user to the log group (`sudo usermod -aG <group> <user>`, then log in again) or re-run `./install.sh --log-group <group>`. Until then, logs are in the fallback directory shown. |
+| `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |

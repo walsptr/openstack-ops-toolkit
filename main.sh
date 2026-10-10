@@ -20,6 +20,7 @@ WORKDIR="${OOT_WORKDIR:-$DEFAULT_WORKDIR}"
 RC_FILE=""
 USE_FZF=1
 LIST_ONLY=0
+LOGGING=0
 
 # Separator field internal (non-whitespace, agar field kosong tidak hilang saat read)
 RS=$'\x1f'
@@ -73,6 +74,12 @@ error() {
 pause() {
     echo
     read -rp "↩️  Tekan Enter untuk kembali..." _ || true
+}
+
+# Tulis ke $LOG_DIR/toolkit.log (no-op jika logging nonaktif)
+tlog() {
+    (( LOGGING )) || return 0
+    log_toolkit "$@"
 }
 
 pager() {
@@ -561,16 +568,22 @@ switch_context() {
     if ! select_rc_file; then
         RC_FILE="$old_rc"
         FLASH="${C_YELLOW}Context tidak berubah${C_RESET}"
+        tlog INFO CONTEXT_SWITCH "from=$old_rc" result=SKIPPED
         return
     fi
 
+    local new_rc="$RC_FILE"
+
     if load_rc "$RC_FILE"; then
         FLASH="${C_GREEN}Context: $(basename "$RC_FILE")${C_RESET}"
+        (( LOGGING )) && log_os_context_args
+        tlog INFO CONTEXT_SWITCH "from=$old_rc" "to=$RC_FILE" result=SUCCESS "${LOG_CTX[@]}"
     else
         pause
         RC_FILE="$old_rc"
         load_rc "$old_rc" >/dev/null 2>&1
         FLASH="${C_RED}Gagal ganti context, tetap di $(basename "$old_rc")${C_RESET}"
+        tlog WARN CONTEXT_SWITCH "from=$old_rc" "to=$new_rc" result=FAILED
     fi
 }
 
@@ -661,6 +674,12 @@ run_script() {
     local i="$1"
     local name="${S_NAME[$i]}"
     local path="${S_PATH[$i]}"
+    local rel="${S_REL[$i]}"
+    local run_id="" start
+
+    # run_id per eksekusi, diteruskan ke script (OSOPS_RUN_ID) agar
+    # baris toolkit.log dan log script bisa di-grep bersama
+    (( LOGGING )) && run_id="$(log_new_run_id)"
 
     clear
     echo "========================================"
@@ -672,6 +691,7 @@ run_script() {
     if [[ ! -f "$path" ]]; then
         error "Script tidak ditemukan: $path"
         FLASH="${C_RED}Script tidak ditemukan: $name${C_RESET}"
+        _LOG_RUN_ID="$run_id" tlog ERROR RUN_MISSING "script=$rel" "path=$path"
         pause
         return
     fi
@@ -690,13 +710,25 @@ run_script() {
         read -rp "Lanjutkan menjalankan script ini? [y/N]: " confirm || confirm=""
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
             FLASH="${C_YELLOW}Dibatalkan: $name${C_RESET}"
+            _LOG_RUN_ID="$run_id" tlog INFO RUN_DECLINED "script=$rel" "name=$name" result=DECLINED
             return
         fi
         echo
     fi
 
-    bash "$path"
+    (( LOGGING )) && log_os_context_args
+    _LOG_RUN_ID="$run_id" tlog INFO RUN_START "script=$rel" "name=$name" \
+        "mutates=${S_MUT[$i]}" "rc_file=$RC_FILE" "${LOG_CTX[@]}"
+
+    start=$SECONDS
+    OSOPS_RUN_ID="$run_id" bash "$path"
     local rc=$?
+
+    if (( rc == 0 )); then
+        _LOG_RUN_ID="$run_id" tlog INFO RUN_END "script=$rel" "rc=$rc" "duration=$((SECONDS - start))s"
+    else
+        _LOG_RUN_ID="$run_id" tlog WARN RUN_END "script=$rel" "rc=$rc" "duration=$((SECONDS - start))s"
+    fi
 
     echo
     if (( rc == 0 )); then
@@ -971,6 +1003,28 @@ if [[ -f "$WORKDIR/scripts.env" ]]; then
 else
     echo "📄 Override : (tidak ada scripts.env)"
 fi
+
+# ============================================================
+# Logging (lib/logging.sh → $LOG_DIR/toolkit.log)
+# ============================================================
+
+LOG_CTX=()
+export OSOPS_HOME="$WORKDIR"
+
+if [[ -f "$WORKDIR/lib/logging.sh" ]]; then
+    # shellcheck source=lib/logging.sh
+    source "$WORKDIR/lib/logging.sh"
+
+    if log_toolkit_init; then
+        LOGGING=1
+        # Diteruskan ke script: direktori log yang sudah di-resolve (termasuk fallback)
+        export LOG_DIR
+        export OSOPS_LOG_DIR="$LOG_DIR"
+        echo "📝 Log      : $LOG_DIR"
+    fi
+else
+    echo "${C_YELLOW}⚠️  lib/logging.sh tidak ditemukan di workdir, logging launcher nonaktif.${C_RESET}"
+fi
 echo
 
 if ! command -v openstack >/dev/null 2>&1; then
@@ -989,7 +1043,18 @@ if [[ -z "$RC_FILE" ]]; then
     fi
 fi
 
-load_rc "$RC_FILE" || exit 1
+if ! load_rc "$RC_FILE"; then
+    tlog WARN AUTH_FAILED "rc_file=$RC_FILE"
+    exit 1
+fi
+
+(( LOGGING )) && log_os_context_args
+if (( USE_FZF )); then
+    tlog INFO SESSION_START mode=tui "workdir=$WORKDIR" "rc_file=$RC_FILE" "${LOG_CTX[@]}"
+else
+    tlog INFO SESSION_START mode=plain "workdir=$WORKDIR" "rc_file=$RC_FILE" "${LOG_CTX[@]}"
+fi
+trap 'tlog INFO SESSION_END "duration=${SECONDS}s"' EXIT
 
 # ============================================================
 # Run

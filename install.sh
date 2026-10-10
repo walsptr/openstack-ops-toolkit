@@ -21,6 +21,7 @@ FZF_MIN_VERSION="0.20.0"   # versi terlama yang sudah dites dengan TUI main.sh
 
 SKIP_CHECKS=0
 CHECKED=0
+LOG_GROUP=""
 
 # ============================================================
 # Functions
@@ -44,15 +45,23 @@ warn() {
 }
 
 usage() {
-    echo "Usage: install.sh [--skip-checks]"
+    echo "Usage: install.sh [--log-group GROUP] [--skip-checks]"
     echo
     echo "Options:"
+    echo "  --log-group GROUP Group pemilik direktori log (harus sudah ada)."
+    echo "                    Anggota group bisa menulis log (direktori 2775/setgid)."
+    echo "                    Default: primary group dari SUDO_USER"
     echo "  --skip-checks     Lewati pengecekan requirement (tidak disarankan)"
     echo "  -y, --yes         Deprecated, tidak berpengaruh (installer tidak lagi bertanya)"
     echo "  -h, --help        Tampilkan help"
     echo
     echo "Script ditemukan otomatis dari header metadata (@name)."
     echo "scripts.env yang sudah ada tidak pernah diubah."
+    echo "Log yang sudah ada di $INSTALL_DIR/log tidak pernah dihapus atau ditimpa."
+    echo
+    echo "Contoh (operator non-root dalam satu group):"
+    echo "  sudo groupadd osops && sudo usermod -aG osops <user>"
+    echo "  ./install.sh --log-group osops"
 }
 
 # version_ge A B  => true jika A >= B
@@ -140,12 +149,12 @@ check_requirements() {
     local tool
     local missing_core=()
 
-    for tool in awk sed grep find sort head wc basename dirname realpath install; do
+    for tool in awk sed grep find sort head wc basename dirname realpath install date mktemp; do
         command -v "$tool" >/dev/null 2>&1 || missing_core+=("$tool")
     done
 
     if (( ${#missing_core[@]} == 0 )); then
-        req_ok "core utils" "awk sed grep find sort head wc basename dirname realpath install"
+        req_ok "core utils" "awk sed grep find sort head wc basename dirname realpath install date mktemp"
     else
         req_missing "core utils" "tidak ditemukan: ${missing_core[*]}" \
             "$(pkg_hint "coreutils findutils gawk sed grep" "coreutils findutils gawk sed grep")"
@@ -255,6 +264,14 @@ while [[ $# -gt 0 ]]; do
         --skip-checks)
             SKIP_CHECKS=1
             ;;
+        --log-group)
+            if [[ -z "${2:-}" ]]; then
+                echo "❌ --log-group membutuhkan nama group." >&2
+                exit 1
+            fi
+            LOG_GROUP="$2"
+            shift
+            ;;
         --checked)
             # Internal: requirement sudah dicek sebelum re-exec sudo
             CHECKED=1
@@ -309,8 +326,28 @@ if [[ "$EUID" -ne 0 ]]; then
     echo "   Re-running installer with sudo..."
     echo
 
+    if [[ -n "$LOG_GROUP" ]]; then
+        exec sudo bash "$SCRIPT_DIR/install.sh" --checked --log-group "$LOG_GROUP"
+    fi
     exec sudo bash "$SCRIPT_DIR/install.sh" --checked
 fi
+
+# ============================================================
+# Log group (default: primary group SUDO_USER)
+# ============================================================
+
+if [[ -z "$LOG_GROUP" ]]; then
+    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+        LOG_GROUP="$(id -gn "$SUDO_USER")"
+    else
+        LOG_GROUP="$(id -gn)"
+        warn "SUDO_USER tidak diketahui, log group default: $LOG_GROUP (hanya anggota group ini yang bisa menulis log)."
+        warn "Gunakan --log-group <group> agar operator non-root bisa menulis log."
+    fi
+fi
+
+getent group "$LOG_GROUP" >/dev/null 2>&1 || \
+    error "Group tidak ditemukan: $LOG_GROUP (buat dengan: groupadd $LOG_GROUP)"
 
 # ============================================================
 # Validate source files
@@ -379,6 +416,29 @@ for dir in "${CATEGORY_DIRS[@]}"; do
 done
 
 # ============================================================
+# Log directory: log/ + log/<kategori>/ (dinamis), group-writable
+# ============================================================
+#
+# Direktori 2775 (setgid) agar file baru mewarisi group; lib/logging.sh
+# membuat file dengan umask 002 (664). File log yang sudah ada tidak
+# pernah dihapus/ditimpa — hanya group & izin tulis group disesuaikan.
+
+info "Preparing log directory..."
+
+LOG_ROOT="$INSTALL_DIR/log"
+mkdir -p "$LOG_ROOT"
+
+for dir in "${CATEGORY_DIRS[@]}"; do
+    [[ "$dir" == "lib" ]] && continue
+    mkdir -p "$LOG_ROOT/$dir"
+done
+
+find "$LOG_ROOT" -type d -exec chgrp "$LOG_GROUP" {} + -exec chmod 2775 {} +
+find "$LOG_ROOT" -type f -name '*.log' -exec chgrp "$LOG_GROUP" {} + -exec chmod g+w {} +
+
+success "Log directory ready: $LOG_ROOT (group: $LOG_GROUP, mode 2775)"
+
+# ============================================================
 # scripts.env (opsional, override lokal) — tidak pernah ditimpa
 # ============================================================
 
@@ -434,6 +494,10 @@ echo "Scripts:"
 for dir in "${CATEGORY_DIRS[@]}"; do
     echo "  $INSTALL_DIR/$dir/"
 done
+echo
+echo "Logs (group $LOG_GROUP):"
+echo "  $LOG_ROOT/toolkit.log"
+echo "  $LOG_ROOT/<category>/<script>-YYYYMMDD.log"
 echo
 echo "Command:"
 echo "  $BIN_PATH"

@@ -11,6 +11,14 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Logging terpusat (lib/logging.sh)
+# shellcheck source=../lib/logging.sh
+if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/logging.sh" 2>/dev/null; then
+    echo "❌ lib/logging.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+log_init
+
 echo "========================================"
 echo "       Cinder Manage Volume"
 echo "========================================"
@@ -28,6 +36,7 @@ mapfile -t VOLUME_TYPES < <(
 
 if [[ ${#VOLUME_TYPES[@]} -eq 0 ]]; then
     echo "❌ Tidak ada volume type yang ditemukan."
+    log_error -q "tidak ada volume type yang ditemukan"
     exit 1
 fi
 
@@ -46,6 +55,7 @@ read -rp "Pilih Volume Type [1-${#VOLUME_TYPES[@]}]: " TYPE_CHOICE
 if ! [[ "$TYPE_CHOICE" =~ ^[0-9]+$ ]] || \
    (( TYPE_CHOICE < 1 || TYPE_CHOICE > ${#VOLUME_TYPES[@]} )); then
     echo "❌ Pilihan volume type tidak valid."
+    log_error -q "input tidak valid: pilihan volume type '$TYPE_CHOICE'"
     exit 1
 fi
 
@@ -70,6 +80,7 @@ mapfile -t CINDER_POOLS < <(
 
 if [[ ${#CINDER_POOLS[@]} -eq 0 ]]; then
     echo "❌ Tidak ada Cinder pool yang ditemukan."
+    log_error -q "tidak ada Cinder pool yang ditemukan"
     exit 1
 fi
 
@@ -88,6 +99,7 @@ read -rp "Pilih Cinder Pool [1-${#CINDER_POOLS[@]}]: " POOL_CHOICE
 if ! [[ "$POOL_CHOICE" =~ ^[0-9]+$ ]] || \
    (( POOL_CHOICE < 1 || POOL_CHOICE > ${#CINDER_POOLS[@]} )); then
     echo "❌ Pilihan Cinder pool tidak valid."
+    log_error -q "input tidak valid: pilihan Cinder pool '$POOL_CHOICE'"
     exit 1
 fi
 
@@ -102,8 +114,11 @@ read -rp "NetApp source path: " SOURCE_PATH
 
 if [[ -z "$SOURCE_PATH" ]]; then
     echo "❌ NetApp source path tidak boleh kosong."
+    log_error -q "input tidak valid: NetApp source path kosong"
     exit 1
 fi
+
+log_event INPUT "volume_type=$VOLUME_TYPE" "pool=$CINDER_POOL" id_type=source-name "source_path=$SOURCE_PATH"
 
 # ============================================================
 # Confirmation
@@ -124,6 +139,8 @@ read -rp "Continue? [y/N]: " CONFIRM
 
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     echo "❌ Operation cancelled."
+    log_result "resource=$SOURCE_PATH" "pool=$CINDER_POOL" "volume_type=$VOLUME_TYPE" \
+        action=cinder-manage result=DECLINED
     exit 0
 fi
 
@@ -134,11 +151,23 @@ fi
 echo
 echo "🚀 Running cinder manage..."
 
-cinder manage \
+if log_run cinder manage \
     --volume-type "$VOLUME_TYPE" \
     --id-type source-name \
     "$CINDER_POOL" \
-    "$SOURCE_PATH"
+    "$SOURCE_PATH"; then
+
+    log_result "resource=$SOURCE_PATH" "pool=$CINDER_POOL" "volume_type=$VOLUME_TYPE" \
+        action=cinder-manage result=SUCCESS
+
+else
+
+    RC=$?
+    log_result "resource=$SOURCE_PATH" "pool=$CINDER_POOL" "volume_type=$VOLUME_TYPE" \
+        action=cinder-manage result=FAILED "msg=$LOG_LAST_ERROR"
+    exit "$RC"
+
+fi
 
 echo
 echo "✅ Cinder manage completed."

@@ -11,6 +11,14 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Logging terpusat (lib/logging.sh)
+# shellcheck source=../lib/logging.sh
+if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/logging.sh" 2>/dev/null; then
+    echo "❌ lib/logging.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+log_init
+
 echo "=========================================="
 echo "       Get Floating IP Information"
 echo "=========================================="
@@ -31,10 +39,12 @@ case "$MODE" in
 
         if [[ -z "$FLOATING_IP" ]]; then
             echo "Error: Floating IP tidak boleh kosong."
+            log_error -q "input tidak valid: Floating IP kosong"
             exit 1
         fi
 
         FLOATING_IPS=("$FLOATING_IP")
+        log_event INPUT mode=single "floating_ip=$FLOATING_IP"
         ;;
 
     2)
@@ -42,6 +52,7 @@ case "$MODE" in
 
         if [[ ! -f "$LIST_FILE" || ! -r "$LIST_FILE" ]]; then
             echo "Error: File '$LIST_FILE' tidak ditemukan atau tidak bisa dibaca."
+            log_error -q "input file tidak ditemukan atau tidak bisa dibaca: $LIST_FILE"
             exit 1
         fi
 
@@ -60,6 +71,7 @@ case "$MODE" in
 
         if [[ ${#FLOATING_IPS[@]} -eq 0 ]]; then
             echo "Error: Tidak ada Floating IP di dalam file."
+            log_error -q "tidak ada Floating IP di dalam file: $LIST_FILE"
             exit 1
         fi
 
@@ -68,15 +80,18 @@ case "$MODE" in
         # Create the file without overwriting an existing one
         if ! ( set -o noclobber; : > "$OUTPUT_FILE" ) 2>/dev/null; then
             echo "Error: Gagal membuat output file: $OUTPUT_FILE"
+            log_error -q "gagal membuat output file: $OUTPUT_FILE"
             exit 1
         fi
 
         echo "Floating IP,Floating IP ID,Project ID,Project Name,Domain ID,Domain Name,Port ID,Server ID,Server Name" >> "$OUTPUT_FILE"
         echo "Output akan disimpan ke: $OUTPUT_FILE"
+        log_event INPUT mode=list "input_file=$LIST_FILE" "count=${#FLOATING_IPS[@]}" "output_file=$OUTPUT_FILE"
         ;;
 
     *)
         echo "Error: Pilihan tidak valid."
+        log_error -q "input tidak valid: mode '$MODE'"
         exit 1
         ;;
 
@@ -233,6 +248,7 @@ for FLOATING_IP in "${FLOATING_IPS[@]}"; do
     if ! get_floating_ip_info "$FLOATING_IP"; then
 
         echo "Error: Floating IP tidak ditemukan."
+        log_result "resource=$FLOATING_IP" action=lookup result=FAILED msg="tidak ditemukan"
 
         if [[ -n "$OUTPUT_FILE" ]]; then
             csv_row "$FLOATING_IP" "NOT FOUND" "-" "-" "-" "-" "-" "-" "-" >> "$OUTPUT_FILE"
@@ -260,6 +276,9 @@ for FLOATING_IP in "${FLOATING_IPS[@]}"; do
             "$DOMAIN_ID" "$DOMAIN_NAME" "$PORT_ID" "$SERVER_ID" "$SERVER_NAME" >> "$OUTPUT_FILE"
     fi
 
+    log_result "resource=$FLOATING_IP" action=lookup result=SUCCESS \
+        "project_id=$PROJECT_ID" "server_id=$SERVER_ID"
+
     SUCCESS=$((SUCCESS + 1))
 
 done
@@ -282,6 +301,8 @@ if [[ -n "$OUTPUT_FILE" ]]; then
 fi
 
 echo "=========================================="
+
+log_event SUMMARY "total=$TOTAL" "success=$SUCCESS" "failed=$FAILED" "output_file=${OUTPUT_FILE:--}"
 
 # Single mode: non-zero exit when the lookup failed
 if [[ -z "$OUTPUT_FILE" && $FAILED -gt 0 ]]; then
