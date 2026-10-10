@@ -192,6 +192,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
+| Delete Volume | volumes | `volumes/delete-volume.sh` | yes | Delete available Cinder volumes (single ID or list), including snapshots (--purge) |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
 
 ### Live Migrate Instances (`servers/live-migrate.sh`)
@@ -251,6 +252,64 @@ warning, refused below `2.30`) and `OSOPS_OS_CMD` (OpenStack CLI command, defaul
 only changes how the CLI is invoked. The `OS_*` credentials loaded by the toolkit are **not**
 passed into the pod; the pod must have its own credentials (`clouds.yaml` / environment). Not yet
 tested against RHOSO.
+
+### Delete Volume (`volumes/delete-volume.sh`)
+
+Deletes Cinder volumes **permanently, including all their snapshots**
+(`openstack volume delete --purge`), one at a time, and waits until each volume is really gone.
+Requires an admin role and `jq`.
+
+```bash
+# From the TUI: no arguments, input mode and confirmation mode are asked interactively.
+bash volumes/delete-volume.sh --id 3f2c...-...                 # one volume
+bash volumes/delete-volume.sh --file volumes.txt --dry-run     # plan only
+bash volumes/delete-volume.sh --file volumes.txt --no-confirm  # full plan + one batch confirmation
+```
+
+| Option | Description |
+|---|---|
+| `--id VOLUME_ID` | One volume (UUID). Cannot be combined with `--file` |
+| `--file PATH` | List of volume IDs, one per line. `#` comments, blank lines, CRLF, extra spaces and duplicates are handled; invalid UUIDs are recorded as `SKIPPED (invalid id)` |
+| `--no-confirm` | No per-volume prompt: the full plan is shown first, then **one** batch confirmation where you must type the number of volumes to delete (anything else cancels, nothing is deleted) |
+| `--dry-run` | Validate everything and print the plan (incl. snapshots and skipped volumes with reasons); never deletes, no lock, no report file |
+| `--interval SEC` | Polling interval while waiting for the deletion (default 3) |
+| `--timeout MIN` | Time limit per volume (default 10; `90s` for seconds) → `FAILED (timeout, last status=...)` |
+| `-h`, `--help` | Show help |
+
+Without `--no-confirm` you are asked for the confirmation mode: per volume (`y` delete, `n` skip
+= `DECLINED`, `q` stop the batch; default `n`), or no per-volume confirmation (as `--no-confirm`).
+
+Rules:
+
+- Only volumes with status exactly `available` are deleted. Any other status (`in-use`, `error`,
+  `creating`, ...) → `SKIPPED (not available, status=<status>)`. The script never detaches, resets
+  state, or uses `--force`.
+- Snapshots are listed with `--all-projects` (volumes can belong to any project) and shown before
+  the confirmation, because `--purge` deletes them too. A snapshot with a status other than
+  `available`/`error` → the volume is `SKIPPED (snapshot <id> status=<status>)`.
+- Validation runs again right before each deletion. If the snapshot list changed since it was shown
+  (plan or prompt), the volume is skipped (`snapshots changed since plan/confirmation`).
+- Project and domain names are resolved once per batch (cached); orphaned ones are shown as
+  `<id> (project not found)` / `(domain not found)`.
+- Deletion is asynchronous: `SUCCESS` only when `volume show` reports the volume as not found;
+  `error_deleting` or timeout → `FAILED`; an API rejection → `FAILED (<API message>)`. Other
+  read errors while polling (e.g. HTTP 503) are never counted as deleted.
+
+The final summary lists deleted volumes (ID, name, project, snapshots, size) and a separate
+**"Volume yang TIDAK dihapus"** table grouped by reason (not available with the actual status, not
+found, invalid id, snapshot status, declined, failed with the error, not processed), plus counts,
+snapshots deleted, and GB freed. The exit code is 1 when any volume `FAILED`.
+
+Safety: only one run at a time (`flock` on `log/volumes/delete-volume.lock`); a warning for `--file`
+runs outside `tmux`/`screen`; `Ctrl-C` while waiting says the deletion continues in Cinder, records
+the volume as `ABORTED` (verify manually), writes a partial summary, and returns to the TUI.
+
+Audit: before deleting, all volume details (ID, name, project ID/name, domain, created_at, status,
+size, type) and every snapshot (ID, name, size, created_at) are logged (`VOLUME_INFO`, `SNAPSHOT`),
+because they cannot be retrieved after deletion. Each run also writes
+`log/volumes/delete-volume-<run_id>-results.tsv` (timestamp, volume_id, name, project_name,
+domain_name, created_at, status, size_gb, snapshot_count, snapshot_ids, result, duration_s,
+message), one line as soon as each volume is done, including skipped ones.
 
 ## Logging
 
@@ -424,12 +483,13 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 
 Category directories are discovered dynamically; add a directory to add a category.
 
-Tests for `servers/live-migrate.sh` run against a stub OpenStack CLI (no cloud needed; requires
-`tmux`, `jq`, `fzf`):
+Tests for `servers/live-migrate.sh` and `volumes/delete-volume.sh` run against a stub OpenStack
+CLI (no cloud needed; requires `tmux`, `jq`, `flock`; `fzf` for the live-migrate picker test):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
 bash tests/live-migrate/run.sh abort      # only tests whose name matches
+bash tests/delete-volume/run.sh
 ```
 
 ## Troubleshooting
@@ -445,5 +505,6 @@ bash tests/live-migrate/run.sh abort      # only tests whose name matches
 | Installer reports redundant `scripts.env` entries | They are now discovered automatically; remove those lines (optional) |
 | `Direktori log tidak bisa ditulis: ... — log dialihkan ke ...` | Your user cannot write to `log/`. Add the user to the log group (`sudo usermod -aG <group> <user>`, then log in again) or re-run `./install.sh --log-group <group>`. Until then, logs are in the fallback directory shown. |
 | `Live migration lain sedang berjalan` | Another `live-migrate.sh` run holds `log/servers/live-migrate.lock` (the holder is shown). Wait for it to finish |
+| `Delete volume lain sedang berjalan` | Another `delete-volume.sh` run holds `log/volumes/delete-volume.lock` (the holder is shown). Wait for it to finish |
 | `Cloud hanya mendukung compute microversion ... (< 2.30)` | Live migration to a chosen host needs compute API ≥ 2.30 |
 | `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |

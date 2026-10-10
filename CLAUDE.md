@@ -117,14 +117,19 @@ Every operational script logs through `lib/logging.sh`. Rules:
 
 ## Script conventions (OpenStack CLI, JSON, prompts)
 
-These rules come from `servers/live-migrate.sh` and apply to every new script:
+These rules come from `servers/live-migrate.sh` and `volumes/delete-volume.sh` and apply to every new script:
 
 * **Call the OpenStack CLI through one wrapper:** an array `OS_CMD=(openstack)` (overridable with the env string `OSOPS_OS_CMD`, split with `read -ra`, because arrays cannot be exported) and a function `os_cli` (plus `os_run` = `log_run` for changing actions). Never call `openstack` directly elsewhere in the script. This keeps scripts testable with a stub and ready for RHOSO (`oc exec ... openstack`).
-* **Pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
+* **Scripts that use the compute API: pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
 * **Parse JSON with `jq`** (`-f json`), with `-` as default for null fields; do not parse table output with awk/sed. Check `jq` at startup with a clear message. One `server show -f json` per state read, not one call per field.
 * **Prompts read from `/dev/tty`** (helper `ask VAR "prompt"`; inside it use a uniquely named local, because `printf -v` with a local of the same name as the caller's variable assigns the wrong variable). Check `( : < /dev/tty )` and fail clearly when no terminal is available.
 * **Never `while read ... < file` when the loop body prompts** — the prompts consume the input file. Read the whole file first with `mapfile`, then strip `\r`, comments, blanks, and duplicates.
-* Long-running or batch operations: lock with `flock -n` (lock file next to the script's log), warn when not inside `tmux`/`screen`, and confirm each resource individually (no "yes to all").
+* Long-running or batch operations: lock with `flock -n` (lock file next to the script's log), warn when not inside `tmux`/`screen`, and confirm each resource individually (no "yes to all"); the only exception is an explicit no-confirmation mode with one batch confirmation (see below).
+* **Listing resources of other projects requires `--all-projects`** (e.g. `volume snapshot list --volume <id> --all-projects`); without it an admin only sees its own project and the script silently misses resources.
+* **Asynchronous deletes must be polled until the resource is gone** (with interval and timeout). Only an explicit "not found" for that ID counts as `SUCCESS`; other read errors (5xx, auth) never do. An `error_deleting`-style status or timeout is `FAILED`.
+* **Log resource details before deleting them** (`log_event` with all identifying fields, including dependent resources like snapshots): after deletion the API can no longer return them.
+* **A "no confirmation" mode still needs one batch confirmation with explicit input** (e.g. typing the number of resources), after showing the full plan; re-validate each resource right before changing it, and skip it if what will be deleted changed since the plan.
+* **Skipped resources must appear in the final summary with their reason** (e.g. the actual status), not only in the log.
 * **Known limitation (RHOSO):** `OSOPS_OS_CMD` only changes how the CLI is called; the toolkit's `OS_*` credentials are not passed into an `oc exec` pod, which needs its own `clouds.yaml`/environment. Document it, do not try to forward secrets.
 
 ## Development Standards
@@ -171,6 +176,7 @@ Validate changes using appropriate syntax checks, tests, and representative usag
 bash -n main.sh install.sh */*.sh          # syntax (includes lib/*.sh)
 shellcheck -x main.sh install.sh */*.sh     # dev tool, no warnings allowed
 bash tests/live-migrate/run.sh              # live-migrate tests (stub CLI, tmux)
+bash tests/delete-volume/run.sh             # delete-volume tests (stub CLI, tmux)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)

@@ -1,0 +1,142 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/delete-volume (dipakai lewat OSOPS_OS_CMD).
+# Mensimulasikan penghapusan volume Cinder (asynchronous) per skenario.
+#
+# State di $STUB_STATE:
+#   calls.log           setiap pemanggilan (argv)
+#   volumes/<id>.json   output "volume show -f json" (hilang = not found)
+#   snaps/<id>.json     output "volume snapshot list --volume <id> ... -f json"
+#   scen/<id>           "<kind> <n>" (default: "ok 2")
+#   polls/<id>          jumlah "volume show" sejak delete diterima
+#   snapcalls/<id>      jumlah "volume snapshot list" untuk volume ini
+#
+# kind: ok N             hilang setelah N kali "volume show" (status deleting)
+#       error_deleting N status error_deleting setelah N kali "volume show"
+#       stuck            tetap deleting (untuk timeout / Ctrl-C)
+#       reject           "volume delete" ditolak API (HTTP 400)
+#       flaky N          "volume show" pertama setelah delete gagal (HTTP 503),
+#                        lalu seperti ok N
+#       newsnap          snapshot baru muncul pada "snapshot list" ke-2
+#
+# Project/domain dari fixtures/projects, fixtures/domains (tidak ada = not found).
+
+# Filter jq memakai $var di dalam kutip tunggal (disengaja)
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+vol_file() { printf '%s/volumes/%s.json' "$STUB_STATE" "$1"; }
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "ok 2"; fi
+}
+
+bump() {
+    local f="$STUB_STATE/$1/$2" n=0
+    mkdir -p "$STUB_STATE/$1"
+    [[ -f "$f" ]] && n="$(cat "$f")"
+    n=$(( n + 1 ))
+    echo "$n" > "$f"
+    echo "$n"
+}
+
+upd() {
+    local f="$1"
+    shift
+    jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+not_found() {
+    echo "No volume with a name or ID of '$1' exists." >&2
+    exit 1
+}
+
+case "$*" in
+    "volume show "*)
+        id="$3"
+        f="$(vol_file "$id")"
+        [[ -f "$f" ]] || not_found "$id"
+
+        if [[ "$(jq -r .status "$f")" == "deleting" ]]; then
+            read -r kind n <<< "$(scen "$id")"
+            poll="$(bump polls "$id")"
+            if [[ "$kind" == "flaky" && "$poll" == "1" ]]; then
+                echo "Service Unavailable (HTTP 503) (Request-ID: req-flaky)" >&2
+                exit 1
+            fi
+            case "$kind" in
+                ok|flaky)
+                    if (( poll >= n )); then
+                        rm -f "$f"
+                        not_found "$id"
+                    fi
+                    ;;
+                error_deleting)
+                    (( poll >= n )) && upd "$f" '.status = "error_deleting"'
+                    ;;
+                newsnap)
+                    rm -f "$f"
+                    not_found "$id"
+                    ;;
+            esac
+        fi
+        cat "$f"
+        ;;
+
+    "volume delete "*)
+        id="${*: -1}"
+        f="$(vol_file "$id")"
+        if [[ ! -f "$f" ]]; then
+            echo "Failed to delete volume with name or ID '$id': No volume with a name or ID of '$id' exists." >&2
+            echo "1 of 1 volumes failed to delete." >&2
+            exit 1
+        fi
+        read -r kind _ <<< "$(scen "$id")"
+        if [[ "$kind" == "reject" ]]; then
+            echo "Failed to delete volume with name or ID '$id': Invalid volume: Volume status must be available or error or error_restoring or error_extending or error_managing and must not be migrating, attached, belong to a group, have snapshots, awaiting a transfer, or be disassociated from snapshots after volume transfer. (HTTP 400) (Request-ID: req-reject)" >&2
+            echo "1 of 1 volumes failed to delete." >&2
+            exit 1
+        fi
+        upd "$f" '.status = "deleting"'
+        ;;
+
+    "volume snapshot list "*)
+        id=""
+        args=("$@")
+        for (( i = 0; i < ${#args[@]}; i++ )); do
+            [[ "${args[$i]}" == "--volume" ]] && id="${args[$((i + 1))]}"
+        done
+        n="$(bump snapcalls "$id")"
+        sf="$STUB_STATE/snaps/$id.json"
+        [[ -f "$sf" ]] || echo '[]' > "$sf"
+        read -r kind _ <<< "$(scen "$id")"
+        if [[ "$kind" == "newsnap" && "$n" == "2" ]]; then
+            upd "$sf" --slurpfile s "$FIX/snapshot.json" \
+                '. + [$s[0] | .ID = "99999999-0000-4000-8000-0000000000ff" | .Name = "snap-new" | ."Created At" = "2026-10-10T00:00:00.000000"]'
+        fi
+        cat "$sf"
+        ;;
+
+    "project show "*)
+        f="$FIX/projects/$3.json"
+        if [[ -f "$f" ]]; then cat "$f"; else echo "No project with a name or ID of '$3' exists." >&2; exit 1; fi
+        ;;
+
+    "domain show "*)
+        f="$FIX/domains/$3.json"
+        if [[ -f "$f" ]]; then cat "$f"; else echo "No domain with a name or ID of '$3' exists." >&2; exit 1; fi
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac
