@@ -9,17 +9,18 @@ and run those scripts with OpenStack credentials already loaded.
 
 ```
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ 🔎 scripts>   < 4/4 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  │
+│ 🔎 scripts>   < 5/5 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  │
 │   Context:  admin-openrc.sh               <enter>   Run       <alt-p>   Preview          ___   ___  _____                                          │
 │   Cloud:    keystone.example.com:5000     <ctrl-e>  Source    <ctrl-d>  Preview down    / _ \ / _ \|_   _|                                         │
 │   Region:   RegionOne                     <ctrl-r>  Reload    <ctrl-u>  Preview up     | (_) | (_) | | |                                           │
 │   User:     admin                         <ctrl-o>  Context   <esc>     Clear filter    \___/ \___/  |_|                                           │
 │   Project:  admin                         <?>       Help      <ctrl-c>  Quit                                                                       │
-│   ──── Scripts(all)[4] ────                                                                                                                        │
+│   ──── Scripts(all)[5] ────                                                                                                                        │
 │   NAME                       CATEGORY  MUTATES  DESCRIPTION                                                   TAGS                                 │
 │ ▌ Assign User to Project     identity  yes      Assign the member or admin role to a user on a project        keystone, role, user, project        │
 │   Floating IP Information    network   no       Look up a floating IP (or a list from a file, saved as CSV…   neutron, floating-ip, port, serve··  │
 │   Instances Information      servers   no       Show instance name, project, and domain for an instance ID…   nova, server, instance, project, ··  │
+│   Live Migrate Instances     servers   yes      Live migrate a list of instances to a target compute host w…  nova, live-migration, rebalance, ··  │
 │   Import Volume from NetApp  volumes   yes      Bring an existing NetApp volume under Cinder management (ci…  cinder, volume, netapp, manage, i··  │
 │ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
 │ │ Assign User to Project                                                                                                                   1/126 │ │
@@ -63,7 +64,8 @@ and run those scripts with OpenStack credentials already loaded.
 | Bash ≥ 4 | |
 | [python-openstackclient](https://docs.openstack.org/python-openstackclient/) | `openstack` CLI, used by the scripts and to verify credentials |
 | [fzf](https://github.com/junegunn/fzf) ≥ 0.20.0 | Terminal UI |
-| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install`, `date`, `mktemp` |
+| [jq](https://jqlang.org/) | JSON parsing of OpenStack CLI output (e.g. *Live Migrate Instances*) |
+| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install`, `date`, `mktemp`, `flock` (util-linux) |
 | `sudo` | Only for installation, when not running as root |
 
 Optional:
@@ -77,13 +79,13 @@ Optional:
 Example on RHEL / Rocky / Fedora:
 
 ```bash
-sudo dnf install -y python3-openstackclient fzf bat
+sudo dnf install -y python3-openstackclient fzf jq bat
 ```
 
 Example on Ubuntu / Debian:
 
 ```bash
-sudo apt-get install -y python3-openstackclient fzf bat
+sudo apt-get install -y python3-openstackclient fzf jq bat
 ```
 
 > What each script can do depends on the role of the OpenStack credentials you load.
@@ -189,7 +191,66 @@ Generated with `bash main.sh --workdir . --list`:
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
+| Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
+
+### Live Migrate Instances (`servers/live-migrate.sh`)
+
+Rebalance: moves a list of instances to one target compute host with live migration, one at
+a time, with a confirmation per VM, progress monitoring, and abort. (Evacuating a compute host for
+maintenance is out of scope.) Requires an admin role, `jq`, and compute microversion ≥ 2.30.
+
+```bash
+# From the TUI: no arguments, everything is asked interactively.
+bash servers/live-migrate.sh --file vms.txt --target compute-07 --dry-run   # plan only
+bash servers/live-migrate.sh --file vms.txt --target compute-07 --interval 10 --timeout 45
+```
+
+| Option | Description |
+|---|---|
+| `--file PATH` | List of instance IDs, one per line. `#` comments, blank lines, CRLF, extra spaces and duplicates are handled; invalid UUIDs are recorded as `SKIPPED (invalid id)` |
+| `--target HOST` | Target host (skips the picker; still validated as `nova-compute` enabled and up) |
+| `--dry-run` | Pre-check all VMs and print the plan (`WILL MIGRATE` / `SKIP (<reason>)`); never migrates, no lock, no report file |
+| `--interval SEC` | Polling interval (default 5) |
+| `--timeout MIN` | Per-migration time limit before you are asked to wait or abort (default 30; `90s` for seconds). Never aborts automatically |
+| `--delay SEC` | Pause between migrations (default 0) |
+| `-h`, `--help` | Show help |
+
+Flow:
+
+1. The target host is chosen once from enabled/up compute hosts (fzf picker, or a numbered menu
+   without fzf, with vCPU/RAM usage when the cloud reports it).
+2. Right before each VM's confirmation a pre-check runs: not found, status not `ACTIVE`, a
+   `task_state` in progress, locked, or already on the target → `SKIPPED`.
+3. A summary (name, ID, project, flavor, source/target host, boot-from-volume or local disk) is
+   shown. Answer `y` migrate, `n` skip (`DECLINED`), `c` change the target for this VM only, `q`
+   stop the batch (remaining VMs are reported as not processed). Default is `n`; there is no
+   "yes to all".
+4. While migrating, one status line shows status, migration status, memory progress, and elapsed
+   time. Press `a` to abort (asks for confirmation). Abort is not instant: monitoring continues
+   until Nova finishes; if the VM already reached the target it is `SUCCESS` ("abort terlambat").
+   A rejected abort (e.g. post-copy) is shown and monitoring continues. When `--timeout` is
+   reached you choose `w` (wait another period) or `a` (abort, with confirmation).
+5. Result: `SUCCESS` (on target), `FAILED` (status `ERROR`, or still on the source after Nova rolled
+   back — the error from `server event show` is included), `ABORTED`. After `SUCCESS`, power state
+   and port bindings are checked (warning only). The exit code is 1 when any VM `FAILED`.
+
+Safety: only one run at a time (`flock` on `log/servers/live-migrate.lock`); a warning if not
+running inside `tmux`/`screen` (an SSH disconnect stops monitoring, not the migration); `Ctrl-C`
+during a migration says the migration continues in Nova, offers to abort it, writes a partial
+summary, and returns to the TUI.
+
+Report: besides the daily log, each run writes
+`log/servers/live-migrate-<run_id>-results.tsv` (timestamp, server_id, name, src_host, dst_host,
+result, duration_s, message), one line as soon as each VM is done.
+
+Environment: `OSOPS_COMPUTE_API_VERSION` (default `2.65`; lowered to the cloud maximum with a
+warning, refused below `2.30`) and `OSOPS_OS_CMD` (OpenStack CLI command, default `openstack`).
+
+**Known limitation (RHOSO):** `OSOPS_OS_CMD="oc exec -n openstack openstackclient -- openstack"`
+only changes how the CLI is invoked. The `OS_*` credentials loaded by the toolkit are **not**
+passed into the pod; the pod must have its own credentials (`clouds.yaml` / environment). Not yet
+tested against RHOSO.
 
 ## Logging
 
@@ -292,7 +353,8 @@ Logging (required for every script, see [Logging](#logging)):
 | `log_run cmd args...` | Log and run an OpenStack command; its stderr is shown and kept in `$LOG_LAST_ERROR`. |
 | `log_result resource=<id> action=<action> result=<RESULT> [key=value ...]` | Outcome per resource. Required in scripts that change resources, including `DECLINED` / `SKIPPED`. |
 
-Do not set your own `EXIT`/`INT`/`TERM` trap (it replaces the logging trap) and do not pipe the
+Do not set your own `EXIT`/`INT`/`TERM` trap (it replaces the logging trap); for cleanup on
+`Ctrl-C`, set `LOG_INTERRUPT_HOOK=<function>` (called before the script exits) and do not pipe the
 whole script output through `tee`. In a nested category (`network/floating-ip/x.sh`) use `../..`
 in the source line.
 
@@ -309,8 +371,12 @@ Rules:
 - Only the header block is parsed (comment lines after the shebang, until the first line of code).
 - The category is the first directory of the path, so `network/floating-ip/release.sh` belongs to
   `network`. A new category is just a new directory.
-- Files in `lib/` and hidden directories are never listed — put shared helpers in `lib/`
-  (e.g. `lib/logging.sh`).
+- Files in `lib/`, `tests/`, and hidden directories are never listed (and never installed) — put
+  shared helpers in `lib/` (e.g. `lib/logging.sh`) and test stubs/fixtures in `tests/`.
+- Call the OpenStack CLI through a wrapper (`OS_CMD` array + `os_cli` function, overridable via
+  `OSOPS_OS_CMD`) and parse JSON output (`-f json`) with `jq`.
+- Read prompts from `/dev/tty`. When a loop over an input file asks questions, read the whole file
+  first (`mapfile`) — never `while read ... < file`, or the prompts consume the file.
 - The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
 
 Then:
@@ -349,6 +415,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── CLAUDE.md               # Architecture and contribution guide
 ├── lib/                    # Shared helpers for scripts (logging.sh), never listed in the TUI
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
+├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
 ├── network/                # Network (Neutron) scripts
 ├── servers/                # Server (Nova) scripts
@@ -356,6 +423,14 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ```
 
 Category directories are discovered dynamically; add a directory to add a category.
+
+Tests for `servers/live-migrate.sh` run against a stub OpenStack CLI (no cloud needed; requires
+`tmux`, `jq`, `fzf`):
+
+```bash
+bash tests/live-migrate/run.sh            # all tests
+bash tests/live-migrate/run.sh abort      # only tests whose name matches
+```
 
 ## Troubleshooting
 
@@ -369,4 +444,6 @@ Category directories are discovered dynamically; add a directory to add a catego
 | DESCRIPTION shows `⚠️ script tidak ditemukan` | A `scripts.env` entry points to a file that does not exist |
 | Installer reports redundant `scripts.env` entries | They are now discovered automatically; remove those lines (optional) |
 | `Direktori log tidak bisa ditulis: ... — log dialihkan ke ...` | Your user cannot write to `log/`. Add the user to the log group (`sudo usermod -aG <group> <user>`, then log in again) or re-run `./install.sh --log-group <group>`. Until then, logs are in the fallback directory shown. |
+| `Live migration lain sedang berjalan` | Another `live-migrate.sh` run holds `log/servers/live-migrate.lock` (the holder is shown). Wait for it to finish |
+| `Cloud hanya mendukung compute microversion ... (< 2.30)` | Live migration to a chosen host needs compute API ≥ 2.30 |
 | `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |

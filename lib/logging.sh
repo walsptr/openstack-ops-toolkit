@@ -16,6 +16,11 @@
 #   log_run CMD ARGS...            log_cmd + jalankan; stderr ditampilkan
 #                                  dan disimpan di LOG_LAST_ERROR
 #
+# Setelah log_init: LOG_FILE (file log script, kosong jika logging
+# nonaktif), LOG_RUN_ID, LOG_DIR. Script yang perlu aksi sendiri saat
+# Ctrl-C/SIGTERM mengisi LOG_INTERRUPT_HOOK=<nama fungsi> (jangan
+# menimpa trap EXIT/INT/TERM); hook dipanggil sebelum exit 130/143.
+#
 # Format baris:
 #   <ISO8601+TZ> <LEVEL> run=<run_id> user=<operator> <pesan>
 #
@@ -39,6 +44,9 @@ _LOG_START=0
 _LOG_SIGNAL=""
 _LOG_FALLBACK_WARNED=0
 LOG_LAST_ERROR=""
+LOG_FILE=""
+LOG_RUN_ID=""
+LOG_INTERRUPT_HOOK=""
 
 # Root toolkit: OSOPS_HOME (diset main.sh) atau parent dari lib/
 if [[ -z "${OSOPS_HOME:-}" ]]; then
@@ -206,6 +214,11 @@ log_init() {
         _LOG_FILE=""
     fi
 
+    # shellcheck disable=SC2034  # dibaca oleh script pemanggil
+    LOG_FILE="$_LOG_FILE"
+    # shellcheck disable=SC2034
+    LOG_RUN_ID="$_LOG_RUN_ID"
+
     log_os_context_args
     log_event START "script=$rel" "pid=$$" "${LOG_CTX[@]}"
 
@@ -218,6 +231,13 @@ log_init() {
 
 _log_on_signal() {
     _LOG_SIGNAL="$1"
+
+    if [[ -n "$LOG_INTERRUPT_HOOK" ]]; then
+        local hook="$LOG_INTERRUPT_HOOK"
+        # Sinyal kedua selama hook berjalan => langsung keluar
+        LOG_INTERRUPT_HOOK=""
+        "$hook" "$1" || true
+    fi
 
     if [[ "$1" == "INT" ]]; then
         echo >&2
@@ -345,6 +365,7 @@ log_run() {
     "$@" 2>"$errfile" || rc=$?
 
     cat "$errfile" >&2 2>/dev/null || true
+    # shellcheck disable=SC2034  # dibaca oleh script pemanggil
     LOG_LAST_ERROR="$(tail -n 5 "$errfile" 2>/dev/null | cut -c1-500)"
     rm -f "$errfile"
 

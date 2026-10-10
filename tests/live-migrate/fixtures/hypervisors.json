@@ -1,0 +1,5 @@
+[
+  {"ID": 1, "Hypervisor Hostname": "compute-a.example.com", "Hypervisor Type": "QEMU", "Host IP": "10.0.0.11", "State": "up", "vCPUs Used": 40, "vCPUs": 64, "Memory MB Used": 196608, "Memory MB": 262144},
+  {"ID": 2, "Hypervisor Hostname": "compute-b.example.com", "Hypervisor Type": "QEMU", "Host IP": "10.0.0.12", "State": "up", "vCPUs Used": 8, "vCPUs": 64, "Memory MB Used": 32768, "Memory MB": 262144},
+  {"ID": 3, "Hypervisor Hostname": "compute-c.example.com", "Hypervisor Type": "QEMU", "Host IP": "10.0.0.13", "State": "up", "vCPUs Used": 16, "vCPUs": 64, "Memory MB Used": 65536, "Memory MB": 262144}
+]

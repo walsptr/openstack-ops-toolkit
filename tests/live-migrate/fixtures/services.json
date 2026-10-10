@@ -1,0 +1,7 @@
+[
+  {"ID": 11, "Binary": "nova-compute", "Host": "compute-a", "Zone": "nova", "Status": "enabled", "State": "up", "Updated At": "2026-10-10T08:00:00.000000"},
+  {"ID": 12, "Binary": "nova-compute", "Host": "compute-b", "Zone": "nova", "Status": "enabled", "State": "up", "Updated At": "2026-10-10T08:00:00.000000"},
+  {"ID": 13, "Binary": "nova-compute", "Host": "compute-c", "Zone": "nova", "Status": "enabled", "State": "up", "Updated At": "2026-10-10T08:00:00.000000"},
+  {"ID": 14, "Binary": "nova-compute", "Host": "compute-d", "Zone": "nova", "Status": "disabled", "State": "up", "Updated At": "2026-10-10T08:00:00.000000"},
+  {"ID": 15, "Binary": "nova-compute", "Host": "compute-e", "Zone": "nova", "Status": "enabled", "State": "down", "Updated At": "2026-10-10T07:00:00.000000"}
+]

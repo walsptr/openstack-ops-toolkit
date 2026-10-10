@@ -204,8 +204,8 @@ parse_headers() {
     ' "$@"
 }
 
-# Discovery: pindai *.sh di subdirektori ROOT (abaikan lib/ dan direktori
-# tersembunyi). File tanpa @name dianggap helper dan tidak didaftarkan.
+# Discovery: pindai *.sh di subdirektori ROOT (abaikan lib/, tests/, dan
+# direktori tersembunyi). File tanpa @name dianggap helper dan tidak didaftarkan.
 discover_records() {
     local root="$1"
     local f rel
@@ -219,7 +219,7 @@ discover_records() {
         files+=("$f")
     done < <(
         find "$root" -mindepth 1 \
-            \( -type d \( -name '.*' -o -name lib \) -prune \) -o \
+            \( -type d \( -name '.*' -o -name lib -o -name tests \) -prune \) -o \
             \( -type f -name '*.sh' ! -name '.*' -print0 \) 2>/dev/null
     )
 
@@ -463,6 +463,7 @@ cmd_list() {
     echo "| Name | Category | Path | Mutates | Description |"
     echo "|---|---|---|---|---|"
     for i in "${!S_PATH[@]}"; do
+        # shellcheck disable=SC2016  # backtick literal untuk Markdown
         printf '| %s | %s | `%s` | %s | %s |\n' \
             "$(md_escape "${S_NAME[$i]}")" \
             "$(md_escape "${S_CAT[$i]}")" \

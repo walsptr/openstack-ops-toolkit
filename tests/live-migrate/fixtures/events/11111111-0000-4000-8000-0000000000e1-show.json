@@ -1,0 +1,3 @@
+{"action": "live-migration", "request_id": "req-lm-11111111-0000-4000-8000-0000000000e1", "message": "Error", "start_time": "2026-10-10T08:00:00.000000",
+ "events": [{"event": "compute_live_migration", "result": "Error", "start_time": "2026-10-10T08:00:01.000000", "finish_time": "2026-10-10T08:00:09.000000",
+   "traceback": "Traceback (most recent call last):\n  File \"/usr/lib/python3/site-packages/nova/compute/manager.py\", line 8800, in _do_live_migration\n    raise exception.LiveMigrationWithOldNovaNotSupported()\nlibvirt.libvirtError: internal error: qemu unexpectedly closed the monitor\n"}]}

@@ -1,0 +1,218 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/live-migrate (dipakai lewat OSOPS_OS_CMD).
+# Mensimulasikan live migration per server berdasarkan skenario.
+#
+# State di $STUB_STATE:
+#   calls.log            setiap pemanggilan (argv)
+#   servers/<id>.json    output "server show -f json"
+#   scen/<id>            "<kind> <ticks>" (default: "success 3")
+#   mig/<id>.json        array migrasi (output "server migration list -f json")
+#
+# kind: success | error | rollback | abort_ok | abort_late | abort_reject
+#       | slow | reject | badport
+#   ticks = jumlah "server show" selama migrasi sampai selesai.
+#   abort_ok/slow tidak selesai sendiri; selesai (cancelled) setelah abort.
+#
+# Env: STUB_MAX_MV (default 2.95), STUB_NO_HYP_STATS=1
+
+# Filter jq memakai $var di dalam kutip tunggal (disengaja)
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+if [[ "${1:-}" == "--os-compute-api-version" ]]; then
+    printf '%s\n' "$2" > "$STUB_STATE/last_mv"
+    shift 2
+fi
+
+srv_file() { printf '%s/servers/%s.json' "$STUB_STATE" "$1"; }
+mig_file() { printf '%s/mig/%s.json' "$STUB_STATE" "$1"; }
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "success 3"; fi
+}
+
+# upd FILE JQ-ARGS... — ubah file JSON di tempat
+upd() {
+    local f="$1"
+    shift
+    jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+need_server() {
+    [[ -f "$(srv_file "$1")" ]] && return 0
+    echo "No server with a name or ID of '$1' exists." >&2
+    exit 1
+}
+
+# Status migrasi aktif terakhir ("" jika tidak ada)
+active_status() {
+    local f
+    f="$(mig_file "$1")"
+    [[ -f "$f" ]] || return 0
+    jq -r 'last | select(.Status | IN("accepted","queued","preparing","running")) | .Status' "$f"
+}
+
+# Selesaikan migrasi: finish ID HOST STATUS TASK MIG_STATUS
+finish() {
+    local id="$1" host="$2" status="$3" mstatus="$4"
+    upd "$(srv_file "$id")" --arg h "$host" --arg s "$status" \
+        '."OS-EXT-SRV-ATTR:host" = $h | .status = $s | ."OS-EXT-STS:task_state" = null | ."OS-EXT-STS:power_state" = 1'
+    upd "$(mig_file "$id")" --arg m "$mstatus" '.[-1].Status = $m'
+}
+
+# Majukan state machine satu langkah (dipanggil per "server show")
+advance() {
+    local id="$1" kind ticks tick src dst aborted
+    [[ -n "$(active_status "$id")" ]] || return 0
+
+    read -r kind ticks <<< "$(scen "$id")"
+    upd "$(mig_file "$id")" '.[-1].tick += 1'
+
+    read -r tick src dst aborted < <(jq -r 'last | "\(.tick) \(."Source Compute") \(."Dest Compute") \(.aborted)"' "$(mig_file "$id")")
+
+    if [[ "$aborted" == "true" && "$kind" =~ ^(abort_ok|slow)$ ]]; then
+        finish "$id" "$src" ACTIVE cancelled
+        return 0
+    fi
+
+    if (( tick == 1 )); then
+        upd "$(mig_file "$id")" '.[-1].Status = "preparing"'
+        return 0
+    fi
+
+    if [[ "$kind" =~ ^(abort_ok|slow)$ ]] || (( tick <= ticks )); then
+        upd "$(mig_file "$id")" '.[-1].Status = "running"'
+        return 0
+    fi
+
+    case "$kind" in
+        error)    finish "$id" "$src" ERROR error ;;
+        rollback) finish "$id" "$src" ACTIVE failed ;;
+        *)        finish "$id" "$dst" ACTIVE completed ;;
+    esac
+}
+
+case "$*" in
+    "versions show"*)
+        printf '[{"Region Name":"RegionOne","Service Type":"compute","Version":"2.1","Status":"CURRENT","Endpoint":"http://nova:8774/v2.1","Min Microversion":"2.1","Max Microversion":"%s"}]\n' \
+            "${STUB_MAX_MV:-2.95}"
+        ;;
+
+    "compute service list"*)
+        cat "$FIX/services.json"
+        ;;
+
+    "hypervisor list"*)
+        if [[ -n "${STUB_NO_HYP_STATS:-}" ]]; then
+            jq 'map(del(."vCPUs", ."vCPUs Used", ."Memory MB", ."Memory MB Used"))' "$FIX/hypervisors.json"
+        else
+            cat "$FIX/hypervisors.json"
+        fi
+        ;;
+
+    "server show "*)
+        need_server "$3"
+        advance "$3"
+        cat "$(srv_file "$3")"
+        ;;
+
+    "server migrate "*)
+        id="${*: -1}"
+        need_server "$id"
+        host=""
+        args=("$@")
+        for (( i = 0; i < ${#args[@]}; i++ )); do
+            [[ "${args[$i]}" == "--host" ]] && host="${args[$((i + 1))]}"
+        done
+        read -r kind _ <<< "$(scen "$id")"
+        if [[ "$kind" == "reject" ]]; then
+            echo "Compute service of $host is unavailable at this time. (HTTP 400)" >&2
+            exit 1
+        fi
+        src="$(jq -r '."OS-EXT-SRV-ATTR:host"' "$(srv_file "$id")")"
+        [[ -f "$(mig_file "$id")" ]] || echo '[]' > "$(mig_file "$id")"
+        upd "$(srv_file "$id")" '."OS-EXT-STS:task_state" = "migrating" | .status = "MIGRATING"'
+        upd "$(mig_file "$id")" --arg id "$id" --arg s "$src" --arg d "$host" \
+            '. + [{"Id": ((map(.Id) | max // 100) + 1), "UUID": "mig-\(length)", "Status": "accepted",
+                   "Server UUID": $id, "Type": "live-migration", "Source Compute": $s,
+                   "Dest Compute": $d, "tick": 0, "aborted": false}]'
+        ;;
+
+    "server migration list"*)
+        id=""
+        args=("$@")
+        for (( i = 0; i < ${#args[@]}; i++ )); do
+            [[ "${args[$i]}" == "--server" ]] && id="${args[$((i + 1))]}"
+        done
+        if [[ -f "$(mig_file "$id")" ]]; then
+            jq 'map(del(.tick, .aborted))' "$(mig_file "$id")"
+        else
+            echo '[]'
+        fi
+        ;;
+
+    "server migration show "*)
+        jq --argjson m "$5" '
+            (map(select(.Id == $m)) | first) as $g
+            | ($g.tick // 0) as $t
+            | { "ID": $g.Id, "Status": $g.Status,
+                "Memory Total Bytes": (if $g.Status == "running" then 4294967296 else null end),
+                "Memory Remaining Bytes": (if $g.Status == "running"
+                    then ([4294967296 - ($t * 1073741824), 0] | max) else null end) }' \
+            "$(mig_file "$4")"
+        ;;
+
+    "server migration abort "*)
+        id="$4"
+        read -r kind _ <<< "$(scen "$id")"
+        if [[ "$kind" == "abort_reject" ]]; then
+            echo "Migration $5 state of instance $id is post-migrating. Cannot abort migration $5 for instance $id while the instance is in this state. (HTTP 400)" >&2
+            exit 1
+        fi
+        upd "$(mig_file "$id")" '.[-1].aborted = true'
+        ;;
+
+    "server event list "*)
+        f="$FIX/events/$4.json"
+        if [[ -f "$f" ]]; then cat "$f"; else echo '[]'; fi
+        ;;
+
+    "server event show "*)
+        f="$FIX/events/$4-show.json"
+        if [[ -f "$f" ]]; then cat "$f"; else echo '{}'; fi
+        ;;
+
+    "project show "*)
+        echo "demo-project"
+        ;;
+
+    "port list --server "*)
+        echo "port-$4"
+        ;;
+
+    "port show "*)
+        id="${3#port-}"
+        f="$(srv_file "$id")"
+        read -r kind _ <<< "$(scen "$id")"
+        if [[ "$kind" == "badport" ]]; then
+            host="$(jq -r '.[-1]."Source Compute"' "$(mig_file "$id")")"
+        else
+            host="$(jq -r '."OS-EXT-SRV-ATTR:host"' "$f")"
+        fi
+        jq -n --arg h "$host" --arg p "$3" '{"id": $p, "binding_host_id": $h}'
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

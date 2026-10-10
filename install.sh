@@ -145,19 +145,26 @@ check_requirements() {
         req_missing "fzf" "tidak ditemukan" "$(pkg_hint fzf fzf)"
     fi
 
+    # jq (parsing JSON output OpenStack CLI, mis. servers/live-migrate.sh)
+    if command -v jq >/dev/null 2>&1; then
+        req_ok "jq" "$(jq --version 2>/dev/null)"
+    else
+        req_missing "jq" "tidak ditemukan" "$(pkg_hint jq jq)"
+    fi
+
     # Core utilities yang dipakai main.sh & scripts
     local tool
     local missing_core=()
 
-    for tool in awk sed grep find sort head wc basename dirname realpath install date mktemp; do
+    for tool in awk sed grep find sort head wc basename dirname realpath install date mktemp flock; do
         command -v "$tool" >/dev/null 2>&1 || missing_core+=("$tool")
     done
 
     if (( ${#missing_core[@]} == 0 )); then
-        req_ok "core utils" "awk sed grep find sort head wc basename dirname realpath install date mktemp"
+        req_ok "core utils" "awk sed grep find sort head wc basename dirname realpath install date mktemp flock"
     else
         req_missing "core utils" "tidak ditemukan: ${missing_core[*]}" \
-            "$(pkg_hint "coreutils findutils gawk sed grep" "coreutils findutils gawk sed grep")"
+            "$(pkg_hint "coreutils findutils gawk sed grep util-linux" "coreutils findutils gawk sed grep util-linux")"
     fi
 
     # sudo (hanya jika bukan root)
@@ -383,6 +390,7 @@ success "Workdir ready: $INSTALL_DIR"
 
 # Kategori = direktori top-level yang berisi script ber-@name (dinamis).
 # lib/ ikut di-copy jika ada, karena script bisa memakai helper di sana.
+# tests/ tidak pernah di-copy: discovery (main.sh --discover) melewatinya.
 mapfile -t CATEGORY_DIRS < <(
     for rec in "${DISCOVERED[@]}"; do
         IFS="$RS" read -r _ rel _ <<< "$rec"

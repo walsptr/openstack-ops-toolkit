@@ -27,6 +27,8 @@ scripts.env.example   Example of the OPTIONAL local override file
 <category>/*.sh       Operational scripts (identity/, network/, servers/, volumes/, ...)
 lib/                  Shared helpers for scripts — never listed in the TUI
 lib/logging.sh        Mandatory logging library (sourced by every script and by main.sh)
+tests/<name>/         Test runners, stub CLIs, fixtures — never listed in the TUI, never installed
+.shellcheckrc         shellcheck settings (source paths relative to each script)
 log/                  Runtime logs (not tracked by git): toolkit.log + log/<category>/<script>-YYYYMMDD.log
 ```
 
@@ -35,7 +37,7 @@ log/                  Runtime logs (not tracked by git): toolkit.log + log/<cate
 The script file itself is the single source of truth. `main.sh` finds scripts automatically:
 
 1. Scan `*.sh` files in subdirectories of the workdir (default `/opt/openstack-ops-toolkit`, or `--workdir`).
-2. Skip files directly in the workdir root (`main.sh`, `install.sh`), any `lib/` directory, and hidden files/directories.
+2. Skip files directly in the workdir root (`main.sh`, `install.sh`), any `lib/` or `tests/` directory, and hidden files/directories. `install.sh` copies only discovered category dirs plus `lib/`, so `tests/` is never installed.
 3. Parse the metadata header of each file (see below). Files without `@name` are treated as helpers and are not listed.
 4. Category = first directory of the path relative to the workdir (`network/floating-ip/x.sh` → `network`).
 5. Apply the optional `scripts.env` override.
@@ -108,9 +110,22 @@ Every operational script logs through `lib/logging.sh`. Rules:
 * When the script already printed an error/warning, log it with `log_error -q` / `log_warn -q` so terminal output does not change.
 * **Never log secrets:** no `OS_PASSWORD`, tokens, application credential secrets, or any variable containing `PASSWORD`, `SECRET`, or `TOKEN` (the library also redacts their values as a safety net — do not rely on it).
 * **Never `tee` the whole script output** (or wrap scripts in `tee` in `main.sh`): it breaks interactive prompts, colors, and fzf. Log explicitly.
-* Do not set your own `EXIT`/`INT`/`TERM` trap in a script — it replaces the library's `START`/`END` trap.
+* Do not set your own `EXIT`/`INT`/`TERM` trap in a script — it replaces the library's `START`/`END` trap. For cleanup on `Ctrl-C`/SIGTERM set `LOG_INTERRUPT_HOOK=<function>`; the library calls it (once; a second signal exits immediately) before `exit 130/143`, so `main.sh` still returns to the TUI. The hook must not block forever (use `read -t`).
+* After `log_init`, `LOG_FILE` and `LOG_RUN_ID` are available (e.g. for per-run report files next to the log). Use `log_event DECISION ...` for user decisions and `log_info` with `dry_run=true` (never `log_result`) for planned-only actions.
 * **Do not hardcode log paths or category names.** The log directory comes from `OSOPS_LOG_DIR` / `LOG_DIR` / `<toolkit root>/log` (with the XDG fallback); the category is derived from the script path. Logging failures must never fail a script.
 * Line format: `<ISO8601+TZ> <LEVEL> run=<run_id> user=<operator> <EVENT> key=value ...`. `main.sh` passes `OSOPS_RUN_ID` so `toolkit.log` and the script log share the `run_id`.
+
+## Script conventions (OpenStack CLI, JSON, prompts)
+
+These rules come from `servers/live-migrate.sh` and apply to every new script:
+
+* **Call the OpenStack CLI through one wrapper:** an array `OS_CMD=(openstack)` (overridable with the env string `OSOPS_OS_CMD`, split with `read -ra`, because arrays cannot be exported) and a function `os_cli` (plus `os_run` = `log_run` for changing actions). Never call `openstack` directly elsewhere in the script. This keeps scripts testable with a stub and ready for RHOSO (`oc exec ... openstack`).
+* **Pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
+* **Parse JSON with `jq`** (`-f json`), with `-` as default for null fields; do not parse table output with awk/sed. Check `jq` at startup with a clear message. One `server show -f json` per state read, not one call per field.
+* **Prompts read from `/dev/tty`** (helper `ask VAR "prompt"`; inside it use a uniquely named local, because `printf -v` with a local of the same name as the caller's variable assigns the wrong variable). Check `( : < /dev/tty )` and fail clearly when no terminal is available.
+* **Never `while read ... < file` when the loop body prompts** — the prompts consume the input file. Read the whole file first with `mapfile`, then strip `\r`, comments, blanks, and duplicates.
+* Long-running or batch operations: lock with `flock -n` (lock file next to the script's log), warn when not inside `tmux`/`screen`, and confirm each resource individually (no "yes to all").
+* **Known limitation (RHOSO):** `OSOPS_OS_CMD` only changes how the CLI is called; the toolkit's `OS_*` credentials are not passed into an `oc exec` pod, which needs its own `clouds.yaml`/environment. Document it, do not try to forward secrets.
 
 ## Development Standards
 
@@ -121,7 +136,8 @@ Every operational script logs through `lib/logging.sh`. Rules:
 * Quote variables and handle command arguments safely.
 * Validate user input and check external command results.
 * Provide clear and actionable error messages.
-* Do not add new required dependencies beyond those listed in the README (bash, openstack client, fzf, core utilities).
+* Do not add new required dependencies beyond those listed in the README (bash, openstack client, fzf, jq, core utilities incl. `flock`).
+* **Development tools** (not runtime dependencies): `shellcheck` (must report no warnings for all `.sh` files; settings in `.shellcheckrc`; if not installed, use a throwaway venv: `python3 -m venv /tmp/sc && /tmp/sc/bin/pip install shellcheck-py`), `tmux` for scripted TUI/prompt tests.
 * Never expose credentials, tokens, or other sensitive information.
 * Avoid destructive operations without appropriate safeguards.
 * Keep documentation consistent with actual behavior.
@@ -132,6 +148,7 @@ Every operational script logs through `lib/logging.sh`. Rules:
 * Do not hardcode the list of categories (`identity network servers volumes`) in `main.sh`, `install.sh`, or docs logic.
 * Do not add OpenStack resource views or actions to the TUI; add a script instead.
 * Do not log secrets, do not `tee` whole script output, and do not hardcode log paths or category names.
+* Do not call `openstack` directly outside the `os_cli`/`os_run` wrapper, and do not use `while read` on an input file in a loop that prompts.
 * Do not change business logic of operational scripts when only metadata or documentation is requested.
 
 ## Development Workflow
@@ -152,13 +169,16 @@ Validate changes using appropriate syntax checks, tests, and representative usag
 
 ```bash
 bash -n main.sh install.sh */*.sh          # syntax (includes lib/*.sh)
-shellcheck -x main.sh install.sh */*.sh     # if available
+shellcheck -x main.sh install.sh */*.sh     # dev tool, no warnings allowed
+bash tests/live-migrate/run.sh              # live-migrate tests (stub CLI, tmux)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)
 ```
 
 Logging checks: after running scripts, inspect `./log/<category>/*.log` and `./log/toolkit.log` (format, `run_id` shared with `toolkit.log`); set `OSOPS_LOG_DIR` to a read-only directory to test the fallback warning; grep the log directory for the test RC file's `OS_PASSWORD` value (must return nothing).
+
+Scripts that call the OpenStack CLI through `os_cli` are tested with a stub CLI (`OSOPS_OS_CMD=tests/<name>/stub/openstack`) returning JSON fixtures, driven in tmux because prompts read `/dev/tty`. Put stubs and fixtures under `tests/<name>/` (stub without `.sh` extension, runner without `@name`). Behavior that only a real cloud shows (abort timing, CLI output format of other OSC versions) must be reported as not verified.
 
 Override behavior can be tested with a temporary workdir containing a `scripts.env` (rename, `!path`, custom absolute path, old format). The TUI needs an interactive terminal; tmux (`send-keys` / `capture-pane`) works for scripted checks. A stub `openstack` command in `PATH` avoids touching a real cloud.
 
