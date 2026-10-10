@@ -24,7 +24,7 @@ The TUI (`main.sh`) only borrows the **look and feel** of k9s (info panel, key h
 main.sh               Entry point: k9s-style TUI launcher (fzf), --no-fzf fallback, --list
 install.sh            Installer: requirement checks, copies category dirs, installs command
 scripts.env.example   Example of the OPTIONAL local override file
-<category>/*.sh       Operational scripts (compute/, identity/, network/, volumes/, ...)
+<category>/*.sh       Operational scripts (identity/, network/, servers/, volumes/, ...)
 lib/                  (optional) shared helpers for scripts — never listed in the TUI
 ```
 
@@ -111,7 +111,7 @@ Parsing rules:
 ## Prohibited
 
 * Do not register scripts that live inside the repo in `scripts.env` — use the metadata header. `scripts.env` is only for local renames, hiding, and scripts outside the repo.
-* Do not hardcode the list of categories (`compute identity network volumes`) in `main.sh`, `install.sh`, or docs logic.
+* Do not hardcode the list of categories (`identity network servers volumes`) in `main.sh`, `install.sh`, or docs logic.
 * Do not add OpenStack resource views or actions to the TUI; add a script instead.
 * Do not change business logic of operational scripts when only metadata or documentation is requested.
 
