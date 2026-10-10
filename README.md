@@ -19,7 +19,7 @@ and run those scripts with OpenStack credentials already loaded.
 │   NAME                       CATEGORY  MUTATES  DESCRIPTION                                                   TAGS                                 │
 │ ▌ Assign User to Project     identity  yes      Assign the member or admin role to a user on a project        keystone, role, user, project        │
 │   Floating IP Information    network   no       Look up a floating IP (or a list from a file) and show its …  neutron, floating-ip, port, serve··  │
-│   Instances Information      servers   no       Show instance name, project ID, and project name for an ins…  nova, server, instance, project, ··  │
+│   Instances Information      servers   no       Show instance name, project, and domain for an instance ID…  nova, server, instance, project, ··  │
 │   Import Volume from NetApp  volumes   yes      Bring an existing NetApp volume under Cinder management (ci…  cinder, volume, netapp, manage, i··  │
 │ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
 │ │ Assign User to Project                                                                                                                   1/126 │ │
@@ -177,7 +177,7 @@ Generated with `bash main.sh --workdir . --list`:
 |---|---|---|---|---|
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file) and show its project, port, and server |
-| Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project ID, and project name for an instance ID |
+| Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
 
 ## Adding a script
