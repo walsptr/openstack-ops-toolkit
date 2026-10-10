@@ -176,7 +176,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Name | Category | Path | Mutates | Description |
 |---|---|---|---|---|
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
-| Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file) and show its project, port, and server |
+| Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
 
