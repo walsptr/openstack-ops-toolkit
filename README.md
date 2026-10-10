@@ -18,7 +18,7 @@ and run those scripts with OpenStack credentials already loaded.
 │   ──── Scripts(all)[4] ────                                                                                                                        │
 │   NAME                       CATEGORY  MUTATES  DESCRIPTION                                                   TAGS                                 │
 │ ▌ Assign User to Project     identity  yes      Assign the member or admin role to a user on a project        keystone, role, user, project        │
-│   Floating IP Information    network   no       Look up a floating IP (or a list from a file) and show its …  neutron, floating-ip, port, serve··  │
+│   Floating IP Information    network   no       Look up a floating IP (or a list from a file, saved as CSV…   neutron, floating-ip, port, serve··  │
 │   Instances Information      servers   no       Show instance name, project, and domain for an instance ID…  nova, server, instance, project, ··  │
 │   Import Volume from NetApp  volumes   yes      Bring an existing NetApp volume under Cinder management (ci…  cinder, volume, netapp, manage, i··  │
 │ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
