@@ -1,0 +1,48 @@
+#!/bin/bash
+# Stub qemu-img untuk tests/upload-img (dipakai lewat OSOPS_QEMU_IMG).
+#
+# State di $STUB_STATE:
+#   qemu.log          setiap pemanggilan (argv)
+#   scen/qemu_info    "ok <virtual_size>" (default "ok 1610612736") | fail
+#   scen/qemu_convert ok (default) | fail (file tujuan parsial, exit 1)
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+
+printf '%s\n' "$*" >> "$STUB_STATE/qemu.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+case "${1:-}" in
+    info)
+        fmt="$3"
+        file="${*: -1}"
+        read -r kind vs <<< "$(scen qemu_info "ok 1610612736")"
+        if [[ "$kind" == "fail" ]]; then
+            echo "qemu-img: Could not open '$file': Image is not in $fmt format" >&2
+            exit 1
+        fi
+        printf '{"virtual-size": %s, "filename": "%s", "format": "%s"}\n' "$vs" "$file" "$fmt"
+        ;;
+    convert)
+        src="${*: -2:1}"
+        dst="${*: -1}"
+        if [[ "$(scen qemu_convert ok)" == "fail" ]]; then
+            head -c 100 "$src" > "$dst"
+            echo "qemu-img: error while writing at byte 0: No space left on device" >&2
+            exit 1
+        fi
+        { printf 'RAW:'; cat "$src"; } > "$dst"
+        printf '    (100.00/100%%)\n'
+        ;;
+    *)
+        echo "stub qemu-img: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

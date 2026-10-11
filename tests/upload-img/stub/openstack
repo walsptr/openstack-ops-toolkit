@@ -1,0 +1,289 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/upload-img (dipakai lewat OSOPS_OS_CMD).
+# Mensimulasikan Glance (upload, import web-download, member, rename).
+#
+# State di $STUB_STATE:
+#   calls.log           setiap pemanggilan (argv)
+#   create_tty          "tty=<0|1> progress=<0|1>" dari "image create" terakhir
+#   images/<id>.json    output "image show -f json" (hilang = not found)
+#   polls/<id>          jumlah "image show" untuk image ini
+#   members/<id>        "<project_id> <status>" per baris
+#   scen/<nama>         skenario (lihat di bawah; tidak ada = default)
+#
+# Skenario:
+#   versions    2.17 (default) | 2.5 | fail
+#   importinfo  web (default) | noweb | fail
+#   create      ok (default) | fail (image tertinggal queued) | reject (format
+#               ditolak) | dupfail (More than one Image exists) | hang (queued,
+#               lalu menunggu; untuk Ctrl-C)
+#   hash        ok (default) | mismatch | convert (Glance mengubah disk_format)
+#   import      ok (default) | fail (API menolak, pesan berisi URL) | failed
+#               (os_glance_failed_import)
+#   polls       jumlah "image show" sampai active (default 2)
+#
+# Project/domain dari fixtures/projects.json, fixtures/domains.json.
+
+# Filter jq memakai $var di dalam kutip tunggal (disengaja)
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+ADMIN_PROJECT="a0000000000000000000000000000001"
+URL_HASH="5f6e2a9c0d1b3e4f"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+mkdir -p "$STUB_STATE/images" "$STUB_STATE/polls" "$STUB_STATE/members"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+img_file() { printf '%s/images/%s.json' "$STUB_STATE" "$1"; }
+
+bump() {
+    local f="$STUB_STATE/polls/$1" n=0
+    [[ -f "$f" ]] && n="$(cat "$f")"
+    n=$(( n + 1 ))
+    echo "$n" > "$f"
+    echo "$n"
+}
+
+upd() {
+    local f="$1"
+    shift
+    jq "$@" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+not_found() {
+    echo "No Image found for $1" >&2
+    exit 1
+}
+
+image_create() {
+    local id="" dfmt="raw" cfmt="bare" vis="shared" owner="$ADMIN_PROJECT" file="" progress=0
+    local min_disk=0 min_ram=0 name="" fmt="table" kind size hash
+    local -a props=() tags=()
+
+    while (( $# > 0 )); do
+        case "$1" in
+            --id)               id="$2"; shift 2 ;;
+            --disk-format)      dfmt="$2"; shift 2 ;;
+            --container-format) cfmt="$2"; shift 2 ;;
+            --public|--private|--shared|--community) vis="${1#--}"; shift ;;
+            --project)          owner="$2"; shift 2 ;;
+            --min-disk)         min_disk="$2"; shift 2 ;;
+            --min-ram)          min_ram="$2"; shift 2 ;;
+            --property)         props+=("$2"); shift 2 ;;
+            --tag)              tags+=("$2"); shift 2 ;;
+            --file)             file="$2"; shift 2 ;;
+            --progress)         progress=1; shift ;;
+            -f)                 fmt="$2"; shift 2 ;;
+            -c)                 shift 2 ;;
+            *)                  name="$1"; shift ;;
+        esac
+    done
+
+    local tty=0
+    [[ -t 1 ]] && tty=1
+    echo "tty=$tty progress=$progress fmt=$fmt" > "$STUB_STATE/create_tty"
+
+    kind="$(scen create ok)"
+    case "$kind" in
+        reject)
+            echo "BadRequestException: 400: Client Error for url: https://glance.test/v2/images, Invalid value '$dfmt' for parameter 'disk_format'" >&2
+            exit 1
+            ;;
+        dupfail)
+            echo "More than one Image exists with the name '$name'." >&2
+            exit 1
+            ;;
+    esac
+
+    size=0
+    hash=""
+    if [[ -n "$file" ]]; then
+        size="$(stat -c %s "$file")"
+        hash="$(sha512sum "$file" | cut -d' ' -f1)"
+        case "$(scen hash ok)" in
+            mismatch) hash="$(printf 'lain' | sha512sum | cut -d' ' -f1)" ;;
+            convert)  hash="$(printf 'konversi' | sha512sum | cut -d' ' -f1)"; dfmt="raw"; size=$(( size * 2 )) ;;
+        esac
+    fi
+
+    jq -n --arg id "$id" --arg name "$name" --arg d "$dfmt" --arg c "$cfmt" --arg v "$vis" \
+        --arg o "$owner" --argjson md "$min_disk" --argjson mr "$min_ram" \
+        --arg created "2026-10-11T08:00:00Z" \
+        '{id: $id, name: $name, status: "queued", disk_format: $d, container_format: $c,
+          visibility: $v, owner: $o, min_disk: $md, min_ram: $mr, size: null, checksum: null,
+          created_at: $created, tags: [], properties: {os_hidden: false}}' > "$(img_file "$id")"
+
+    local p
+    for p in "${props[@]}"; do
+        upd "$(img_file "$id")" --arg k "${p%%=*}" --arg v "${p#*=}" '.properties[$k] = $v'
+    done
+    for p in "${tags[@]}"; do
+        upd "$(img_file "$id")" --arg t "$p" '.tags += [$t]'
+    done
+
+    if [[ "$kind" == "hang" ]]; then
+        sleep 60
+        exit 1
+    fi
+
+    if [[ -n "$file" ]]; then
+        if (( progress )) && [[ -t 1 ]]; then
+            printf '\r[%-30s] %s' '==============>' '50%'
+            sleep 0.3
+            printf '\r[%-30s] %s' '=============================>' '100%'
+        fi
+        if [[ "$kind" == "fail" ]]; then
+            echo "Image creation failed: Connection aborted (ConnectionResetError)" >&2
+            exit 1
+        fi
+        upd "$(img_file "$id")" --argjson s "$size" --arg h "$hash" \
+            '.status = "saving" | .size = $s | .properties.os_hash_algo = "sha512" | .properties.os_hash_value = $h'
+    elif [[ "$kind" == "fail" ]]; then
+        echo "Image creation failed: Service Unavailable (HTTP 503)" >&2
+        exit 1
+    fi
+
+    if [[ "$fmt" == "value" ]]; then
+        echo "$id"
+    fi
+}
+
+image_list() {
+    local name="" hidden=false
+    while (( $# > 0 )); do
+        case "$1" in
+            --name)   name="$2"; shift 2 ;;
+            --hidden) hidden=true; shift ;;
+            *)        shift ;;
+        esac
+    done
+    local f
+    {
+        for f in "$STUB_STATE"/images/*.json; do
+            [[ -f "$f" ]] || continue
+            cat "$f"
+        done
+    } | jq -s --arg n "$name" --argjson h "$hidden" '
+        [ .[] | select(.name == $n and ((.properties.os_hidden // false) == $h))
+          | { ID: .id, Name: .name, "Disk Format": .disk_format, "Container Format": .container_format,
+              Size: .size, Checksum: .checksum, Status: .status, Visibility: .visibility,
+              Protected: false, Project: .owner, Tags: .tags } ]'
+}
+
+case "$*" in
+    "versions show"*)
+        case "$(scen versions 2.17)" in
+            fail) echo "Unable to establish connection" >&2; exit 1 ;;
+            *)    jq -n --arg v "$(scen versions 2.17)" \
+                    '[{"Region Name": "RegionTest", "Service Type": "image", "Version": $v, "Status": "CURRENT"},
+                      {"Region Name": "RegionTest", "Service Type": "image", "Version": "2.1", "Status": "SUPPORTED"}]' ;;
+        esac
+        ;;
+
+    "image import info"*)
+        case "$(scen importinfo web)" in
+            web)   echo '{"import-methods": ["glance-direct", "web-download", "copy-image"]}' ;;
+            noweb) echo '{"import-methods": ["glance-direct"]}' ;;
+            fail)  echo "Forbidden (HTTP 403)" >&2; exit 1 ;;
+        esac
+        ;;
+
+    "project list"*)  cat "$FIX/projects.json" ;;
+    "domain list"*)   cat "$FIX/domains.json" ;;
+
+    "image create "*) shift 2; image_create "$@" ;;
+
+    "image list "*)   shift 2; image_list "$@" ;;
+
+    "image show "*)
+        id="$3"
+        f="$(img_file "$id")"
+        [[ -f "$f" ]] || not_found "$id"
+        st="$(jq -r .status "$f")"
+        if [[ "$st" == "saving" || "$st" == "importing" ]]; then
+            n="$(bump "$id")"
+            if (( n >= $(scen polls 2) )); then
+                upd "$f" '.status = "active"'
+            fi
+        fi
+        cat "$f"
+        ;;
+
+    "image import "*)
+        id="$3"
+        uri=""
+        args=("$@")
+        for (( i = 0; i < ${#args[@]}; i++ )); do
+            [[ "${args[$i]}" == "--uri" ]] && uri="${args[$((i + 1))]}"
+        done
+        f="$(img_file "$id")"
+        [[ -f "$f" ]] || not_found "$id"
+        case "$(scen import ok)" in
+            fail)
+                echo "Failed to import image from URI $uri: HTTP 400 Bad Request" >&2
+                exit 1
+                ;;
+            failed)
+                upd "$f" '.properties.os_glance_failed_import = "file1"'
+                ;;
+            *)
+                upd "$f" --arg h "$URL_HASH" \
+                    '.status = "importing" | .size = 4096 | .properties.os_hash_algo = "sha512" | .properties.os_hash_value = $h'
+                ;;
+        esac
+        echo "| id | $id |"
+        ;;
+
+    "image add project "*)
+        id="$4"
+        p="$5"
+        [[ -f "$(img_file "$id")" ]] || not_found "$id"
+        echo "$p pending" >> "$STUB_STATE/members/$id"
+        jq -n --arg i "$id" --arg p "$p" '{image_id: $i, member_id: $p, status: "pending"}'
+        ;;
+
+    "image member list "*)
+        id="$4"
+        f="$STUB_STATE/members/$id"
+        [[ -f "$f" ]] || { echo '[]'; exit 0; }
+        jq -R -s --arg i "$id" '[ split("\n")[] | select(. != "") | split(" ")
+                                  | {"Image ID": $i, "Member ID": .[0], "Status": .[1]} ]' "$f"
+        ;;
+
+    "image set "*)
+        id="${*: -1}"
+        f="$(img_file "$id")"
+        [[ -f "$f" ]] || not_found "$id"
+        args=("$@")
+        for (( i = 2; i < ${#args[@]} - 1; i++ )); do
+            case "${args[$i]}" in
+                --name)   upd "$f" --arg n "${args[$((i + 1))]}" '.name = $n' ;;
+                --hidden) upd "$f" '.properties.os_hidden = true' ;;
+            esac
+        done
+        ;;
+
+    "image delete "*)
+        id="${*: -1}"
+        f="$(img_file "$id")"
+        if [[ ! -f "$f" ]]; then
+            echo "Failed to delete image with name or ID '$id': No Image found for $id" >&2
+            exit 1
+        fi
+        rm -f "$f"
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

@@ -65,7 +65,7 @@ and run those scripts with OpenStack credentials already loaded.
 | [python-openstackclient](https://docs.openstack.org/python-openstackclient/) | `openstack` CLI, used by the scripts and to verify credentials |
 | [fzf](https://github.com/junegunn/fzf) ≥ 0.20.0 | Terminal UI |
 | [jq](https://jqlang.org/) | JSON parsing of OpenStack CLI output (e.g. *Live Migrate Instances*) |
-| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install`, `date`, `mktemp`, `flock` (util-linux) |
+| Core utilities | `awk`, `sed`, `grep`, `find`, `sort`, `head`, `wc`, `basename`, `dirname`, `realpath`, `install`, `date`, `mktemp`, `stat`, `df`, `sha256sum`/`sha512sum`/`md5sum` (coreutils), `flock` (util-linux) |
 | `sudo` | Only for installation, when not running as root |
 
 Optional:
@@ -73,6 +73,7 @@ Optional:
 | Optional | Used for |
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
+| `qemu-img` (qemu-img / qemu-utils) | *Upload Image*: virtual size (default `--min-disk`) and optional conversion to raw. Without it both are skipped |
 | [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
 | `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
 
@@ -189,6 +190,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Name | Category | Path | Mutates | Description |
 |---|---|---|---|---|
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
+| Upload Image | images | `images/upload-img.sh` | yes | Upload an image to Glance with progress, sharing, and checksum verification |
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -311,6 +313,94 @@ because they cannot be retrieved after deletion. Each run also writes
 domain_name, created_at, status, size_gb, snapshot_count, snapshot_ids, result, duration_s,
 message), one line as soon as each volume is done, including skipped ones.
 
+### Upload Image (`images/upload-img.sh`)
+
+Uploads **one** image to Glance in the active region, waits until it is `active`, and verifies it.
+Requires an admin role and `jq`; `qemu-img` is optional.
+
+```bash
+# From the TUI: no arguments, everything is asked interactively.
+bash images/upload-img.sh --file ubuntu-24.04.qcow2 --name ubuntu-24.04 --disk-format qcow2 \
+    --visibility public --preset linux --property os_distro=ubuntu --property os_version=24.04
+bash images/upload-img.sh --file win2022.qcow2 --name win2022 --disk-format qcow2 \
+    --visibility shared --project proj-a --project proj-b --preset windows-uefi --convert-raw
+bash images/upload-img.sh --url https://mirror.example.com/cirros.qcow2 --name cirros \
+    --disk-format qcow2 --visibility private --project demo --checksum sha512:<hash>
+bash images/upload-img.sh --file x.raw --name x --disk-format raw --visibility public --dry-run
+```
+
+| Option | Description |
+|---|---|
+| `--file PATH` / `--url URL` | Source (mutually exclusive). A local file must exist, be readable and not empty. A URL must be `http`/`https` and is only offered when the region supports the `web-download` import method |
+| `--name NAME` | Image name (interactive default: file/URL name without extension) |
+| `--disk-format FMT` | **Required.** Never detected or guessed (not from content, not from the extension). The interactive picker lists `raw qcow2 vmdk vhd vhdx vdi iso ploop`; any value given here is passed to Glance as-is. Container format is always `bare` |
+| `--visibility V` | `public`, `private` (one owner project: `--project` or picker), `shared` (owned by the credentials' project; recipients: repeat `--project` or multi-select picker), `community` (usable by all projects, not listed by default) |
+| `--project P` | Project name or ID (names that exist in several domains must use the ID) |
+| `--min-disk GB`, `--min-ram MB` | Default `--min-disk`: virtual size from `qemu-img` rounded up to GB |
+| `--preset P` | `linux` (`hw_qemu_guest_agent=yes`, `hw_disk_bus=virtio`, interactive: `os_distro`/`os_version`), `windows` (`os_type=windows`, `hw_qemu_guest_agent=yes`), `windows-uefi` (windows + `hw_firmware_type=uefi`, `hw_machine_type=q35`), `none` |
+| `--property K=V`, `--tag T` | Repeatable; `--property` overrides preset values |
+| `--convert-raw` | Convert to raw with `qemu-img convert -p -f <disk-format> -O raw` before uploading |
+| `--tmp-dir PATH` | Where the converted file is written (default `${TMPDIR:-/tmp}`) |
+| `--checksum ALGO:HASH` | Expected hash (`md5`, `sha1`, `sha224`, `sha256`, `sha384`, `sha512`). URL: compared with Glance's hash after import. File: checked against the local file before uploading |
+| `--interval SEC`, `--timeout MIN` | Polling interval (default 5) and time limit until `active` (default 60; `90s` for seconds) |
+| `--dry-run` | Detection, validation, format/project selection, duplicate check and summary, plus the OpenStack commands that would run. No conversion, upload, sharing or rotation |
+| `-h`, `--help` | Show help |
+
+Run with arguments, only required values that are missing are asked for (source, name, disk format,
+visibility, projects, duplicate action). Optional values (conversion, min-disk/min-ram, preset,
+`os_distro`/`os_version`) are asked only when the script runs without arguments.
+
+Flow:
+
+1. **Region capabilities** (shown at start, never fatal): region and auth host, maximum Glance API
+   version (`os_hidden` needs ≥ 2.7), import methods (`web-download`). The Glance storage backend
+   is not detected.
+2. **Virtual size**: with `qemu-img`, a local file and a format other than `iso`,
+   `qemu-img info -f <disk-format>` sets the default `--min-disk` (`vhd` is passed to qemu-img as
+   `vpc`, `ploop` as `parallels`). If qemu-img cannot read the file as that format, a warning says
+   the file may not match the chosen format; the upload is not blocked.
+3. **Conversion to raw** (offered only with `qemu-img`, a local file, and a format other than
+   `raw`/`iso`): recommended for **Ceph RBD** backends (copy-on-write clones); for other backends
+   (file, swift, cinder) the original format is usually smaller and faster to upload. Free space in
+   `--tmp-dir` must be at least virtual size + 5% (min. 1 GiB). The temporary file is always removed
+   (success, failure, `Ctrl-C`).
+4. **Duplicate names**: images with the same name (including hidden ones when supported) are listed
+   with ID, owner, visibility, status and created_at. Choose `a` cancel, `c` continue with a
+   duplicate name, or `r` **rotate**: after the new image is `active` and verified, older images of
+   the same owner are renamed to `<name>-<YYYYMMDD of created_at>` (suffix `-2`, `-3`… if taken) and
+   hidden (`os_hidden=true`, if supported). Rotation never runs when the upload fails. With `c`,
+   the final summary shows the uploaded image ID next to the IDs of the other images with the same
+   name. The OpenStack client looks up the name before uploading and refuses when more than one
+   image with that name is visible; the script then shows the reserved ID (not created) and the
+   duplicate IDs.
+5. **Summary and one `y/N` confirmation** — always shows the region. Outside `tmux`/`screen`, files
+   larger than 5 GiB get a warning that an SSH disconnect stops the upload.
+6. **Upload**: `openstack image create --id <uuid> ... --file <path> --progress`. The image ID is
+   generated by the script and reserved with `--id`, so the output (the progress bar) is never
+   captured. URL: an empty image is created, then `openstack image import --method web-download`
+   (no progress bar). The script then polls until `active` (`killed`/`deleted`, a failed import
+   (`os_glance_failed_import`) or the timeout → failed), with status and elapsed time on one line.
+7. **Verification**: Glance's `size` and `os_hash_algo`/`os_hash_value` are compared with the
+   uploaded file (the converted file when converted). If they differ but Glance changed the
+   `disk_format` (conversion during import in that region), it is a warning; otherwise
+   `FAILED (checksum mismatch)` and you are offered to delete the image.
+8. **Sharing** (`shared`): `openstack image add project` per recipient. Members stay `pending` until
+   the recipient project accepts with its own credentials: `openstack image set --accept <image_id>`
+   (the instruction is shown and logged). The script does not accept on the recipient's behalf:
+   `openstack image set --accept --project <p>` also changes the image owner to `<p>`.
+
+On failure or `Ctrl-C` during the upload, an image left in `queued`/`saving`/`importing`/`killed` is
+detected and you are offered to delete it (after `Ctrl-C` the prompt times out after 60 s → kept).
+The final summary shows image ID, name, status, disk format, visibility, owner, recipients with
+member status, hash, size, verification result and the log path.
+
+Audit: capabilities, source, chosen disk format, `qemu-img info` result or warning, conversion
+(duration, size before/after), all image parameters, decisions, and commands are logged; the progress
+bar is not (only upload start, end and duration). `RESULT` lines: `action=upload-image` (`name`,
+`region`, `disk_format`, `visibility`, `owner`, `size`, `hash`, `duration`, `msg`), `share-image`,
+`rotate-image`, `cleanup-image`. Credentials in a URL (`user:pass@`, query parameters such as
+`token`, `signature`, `key`) are masked (`***`) on screen and in the log.
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -413,8 +503,9 @@ Logging (required for every script, see [Logging](#logging)):
 | `log_result resource=<id> action=<action> result=<RESULT> [key=value ...]` | Outcome per resource. Required in scripts that change resources, including `DECLINED` / `SKIPPED`. |
 
 Do not set your own `EXIT`/`INT`/`TERM` trap (it replaces the logging trap); for cleanup on
-`Ctrl-C`, set `LOG_INTERRUPT_HOOK=<function>` (called before the script exits) and do not pipe the
-whole script output through `tee`. In a nested category (`network/floating-ip/x.sh`) use `../..`
+`Ctrl-C`, set `LOG_INTERRUPT_HOOK=<function>` (called before the script exits); for cleanup that
+must always run (e.g. temporary files), set `LOG_EXIT_HOOK=<function>` (called once on any exit).
+Do not pipe the whole script output through `tee`. In a nested category (`network/floating-ip/x.sh`) use `../..`
 in the source line.
 
 | Tag | Required | Description |
@@ -476,6 +567,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
+├── images/                 # Image (Glance) scripts
 ├── network/                # Network (Neutron) scripts
 ├── servers/                # Server (Nova) scripts
 └── volumes/                # Block storage (Cinder) scripts
@@ -483,13 +575,15 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 
 Category directories are discovered dynamically; add a directory to add a category.
 
-Tests for `servers/live-migrate.sh` and `volumes/delete-volume.sh` run against a stub OpenStack
-CLI (no cloud needed; requires `tmux`, `jq`, `flock`; `fzf` for the live-migrate picker test):
+Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh` and `images/upload-img.sh` run
+against a stub OpenStack CLI (and a stub `qemu-img`; no cloud needed; requires `tmux`, `jq`, `flock`;
+`fzf` for the picker tests):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
 bash tests/live-migrate/run.sh abort      # only tests whose name matches
 bash tests/delete-volume/run.sh
+bash tests/upload-img/run.sh
 ```
 
 ## Troubleshooting
@@ -507,4 +601,6 @@ bash tests/delete-volume/run.sh
 | `Live migration lain sedang berjalan` | Another `live-migrate.sh` run holds `log/servers/live-migrate.lock` (the holder is shown). Wait for it to finish |
 | `Delete volume lain sedang berjalan` | Another `delete-volume.sh` run holds `log/volumes/delete-volume.lock` (the holder is shown). Wait for it to finish |
 | `Cloud hanya mendukung compute microversion ... (< 2.30)` | Live migration to a chosen host needs compute API ≥ 2.30 |
+| `Sumber URL butuh import method web-download, tidak tersedia di region ...` | The active region's Glance does not offer `web-download`: download the file and use `--file` |
+| `Upload ditolak karena ada lebih dari satu image bernama ...` | The OpenStack client refuses an upload when more than one visible image has that name: use another name, or rename/hide the old images (rotation) |
 | `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |

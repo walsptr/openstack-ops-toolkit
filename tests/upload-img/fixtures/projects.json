@@ -1,0 +1,6 @@
+[
+  {"ID": "a0000000000000000000000000000001", "Name": "admin", "Domain ID": "default", "Description": "", "Enabled": true},
+  {"ID": "a0000000000000000000000000000002", "Name": "proj-alpha", "Domain ID": "default", "Description": "", "Enabled": true},
+  {"ID": "a0000000000000000000000000000003", "Name": "proj-beta", "Domain ID": "default", "Description": "", "Enabled": true},
+  {"ID": "a0000000000000000000000000000004", "Name": "proj-gamma", "Domain ID": "d0000000000000000000000000000002", "Description": "", "Enabled": true}
+]

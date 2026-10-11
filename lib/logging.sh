@@ -20,6 +20,9 @@
 # nonaktif), LOG_RUN_ID, LOG_DIR. Script yang perlu aksi sendiri saat
 # Ctrl-C/SIGTERM mengisi LOG_INTERRUPT_HOOK=<nama fungsi> (jangan
 # menimpa trap EXIT/INT/TERM); hook dipanggil sebelum exit 130/143.
+# Pembersihan yang harus selalu jalan (mis. file sementara) diisi lewat
+# LOG_EXIT_HOOK=<nama fungsi>; dipanggil sekali saat script keluar
+# (normal, error, atau sinyal), sebelum baris END.
 #
 # Format baris:
 #   <ISO8601+TZ> <LEVEL> run=<run_id> user=<operator> <pesan>
@@ -47,6 +50,7 @@ LOG_LAST_ERROR=""
 LOG_FILE=""
 LOG_RUN_ID=""
 LOG_INTERRUPT_HOOK=""
+LOG_EXIT_HOOK=""
 
 # Root toolkit: OSOPS_HOME (diset main.sh) atau parent dari lib/
 if [[ -z "${OSOPS_HOME:-}" ]]; then
@@ -249,6 +253,12 @@ _log_on_signal() {
 _log_on_exit() {
     local rc=$?
     local end duration
+
+    if [[ -n "$LOG_EXIT_HOOK" ]]; then
+        local hook="$LOG_EXIT_HOOK"
+        LOG_EXIT_HOOK=""
+        "$hook" "$rc" || true
+    fi
 
     end="$(date +%s)"
     duration=$(( end - ${_LOG_START:-end} ))
