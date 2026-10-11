@@ -61,7 +61,6 @@ format, visibility, project, aksi duplikat).
 Environment:
   OSOPS_OS_CMD    Perintah OpenStack CLI (default: openstack)
   OSOPS_QEMU_IMG  Perintah qemu-img (default: qemu-img; opsional)
-  OSOPS_NO_FZF=1  Pakai menu bernomor walaupun fzf tersedia
 EOF
 }
 
@@ -244,10 +243,6 @@ trim() {
     printf '%s' "$s"
 }
 
-use_fzf() {
-    [[ "${OSOPS_NO_FZF:-0}" != "1" ]] && command -v fzf >/dev/null 2>&1
-}
-
 fmt_elapsed() {
     printf '%02d:%02d' $(( $1 / 60 )) $(( $1 % 60 ))
 }
@@ -363,58 +358,48 @@ new_uuid() {
     IMAGE_ID="${u,,}"
 }
 
-# pick TITLE MULTI ITEM... — picker fzf (fallback menu bernomor).
-# Hasil: index item di PICKED. Return 1 jika tidak ada yang dipilih.
-pick() {
-    local title="$1" multi="$2" line answer tok i n
+# menu_choice TITLE DEFAULT ITEM... — menu bernomor yang tetap terlihat di layar
+# (sengaja bukan fzf: kursor fzf selalu di item pertama, satu Enter langsung
+# memilihnya, dan picker hilang dari layar). DEFAULT kosong = wajib dipilih.
+# Jawaban: nomor atau kata pertama item. Hasil: index (0-based) di MENU_IDX.
+menu_choice() {
+    local title="$1" def="$2" answer i n key tries=0 hint
     shift 2
-    local -a items=("$@") lines=() opts=()
-    local -A seen=()
+    local -a items=("$@")
 
-    PICKED=()
     n=${#items[@]}
-    has_tty || die "Butuh terminal interaktif (/dev/tty) untuk memilih: $title"
+    MENU_IDX=-1
+    if [[ -n "$def" ]]; then hint="(default $def)"; else hint="(wajib, tanpa default)"; fi
 
-    if use_fzf; then
-        opts=(--layout=reverse --border --info=inline --height=40% --prompt='> '
-              --delimiter=$'\t' --with-nth=2..)
-        if (( multi )); then
-            opts+=(--multi --header="$title (TAB = pilih beberapa, Enter = selesai)")
-        else
-            opts+=(--header="$title")
+    echo
+    echo "${C_BOLD}$title${C_RESET}"
+    for i in "${!items[@]}"; do
+        printf '  %d. %s\n' $(( i + 1 )) "${items[$i]}"
+    done
+
+    while true; do
+        tries=$(( tries + 1 ))
+        (( tries <= 5 )) || die "$title wajib dipilih."
+        ask answer "Pilih [1-$n atau nama] $hint: "
+        answer="$(trim "$answer")"
+        [[ -z "$answer" ]] && answer="$def"
+        if [[ -z "$answer" ]]; then
+            echo "${C_YELLOW}⚠️  $title wajib dipilih (tidak ada default).${C_RESET}"
+            continue
         fi
-        mapfile -t lines < <(
-            for i in "${!items[@]}"; do printf '%d\t%s\n' "$i" "${items[$i]}"; done |
-                fzf "${opts[@]}" 2>/dev/null || true
-        )
-        for line in "${lines[@]}"; do
-            [[ -n "$line" ]] && PICKED+=("${line%%$'\t'*}")
-        done
-    else
-        echo
-        echo "$title"
+        if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= n )); then
+            MENU_IDX=$(( answer - 1 ))
+            return 0
+        fi
         for i in "${!items[@]}"; do
-            printf '  %2d. %s\n' $(( i + 1 )) "${items[$i]}"
-        done
-        if (( multi )); then
-            ask answer "Pilih nomor (pisahkan dengan koma, mis. 1,3): "
-        else
-            ask answer "Pilih [1-$n]: "
-        fi
-        for tok in ${answer//,/ }; do
-            if [[ "$tok" =~ ^[0-9]+$ ]] && (( tok >= 1 && tok <= n )); then
-                if [[ -z "${seen[$tok]+x}" ]]; then
-                    seen[$tok]=1
-                    PICKED+=($(( tok - 1 )))
-                fi
-            else
-                warn "Pilihan tidak valid diabaikan: $tok"
+            key="${items[$i]%% *}"
+            if [[ "${answer,,}" == "${key,,}" ]]; then
+                MENU_IDX=$i
+                return 0
             fi
-            (( multi )) || break
         done
-    fi
-
-    (( ${#PICKED[@]} > 0 ))
+        echo "${C_YELLOW}⚠️  Pilihan tidak valid: $answer${C_RESET}"
+    done
 }
 
 # ============================================================
@@ -996,10 +981,12 @@ load_projects() {
 }
 
 # Index project dari nama atau ID => PIDX. Nama ganda di domain berbeda harus pakai ID.
-resolve_project() {
+# Return 0 = ditemukan, 1 = tidak ditemukan, 2 = nama ambigu. Pesan di PERR.
+find_project() {
     local want="$1" i n=0
 
     PIDX=-1
+    PERR=""
     for i in "${!PROJ_IDS[@]}"; do
         if [[ "${PROJ_IDS[$i]}" == "$want" ]]; then
             PIDX=$i
@@ -1013,8 +1000,74 @@ resolve_project() {
         fi
     done
     (( n == 1 )) && return 0
-    (( n > 1 )) && die "Nama project '$want' ada di lebih dari satu domain; gunakan project ID."
-    die "Project tidak ditemukan: $want"
+    if (( n > 1 )); then
+        PERR="Nama project '$want' ada di lebih dari satu domain; gunakan project ID."
+        return 2
+    fi
+    PERR="Project tidak ditemukan: $want"
+    return 1
+}
+
+resolve_project() {
+    find_project "$1" || die "$PERR"
+}
+
+print_projects() {
+    local i
+    printf '  %s%-30s %-20s %s%s\n' "$C_BOLD" NAMA DOMAIN ID "$C_RESET"
+    for i in "${!PROJ_IDS[@]}"; do
+        printf '  %s\n' "$(project_label "$i")"
+    done
+}
+
+# ask_projects MULTI PROMPT — input nama/ID project (MULTI: dipisah koma),
+# divalidasi dan ditanya ulang jika salah; "?" menampilkan daftar project.
+# Hasil: index di PROJ_SEL.
+ask_projects() {
+    local multi="$1" prompt="$2" answer tok ok tries=0
+    local -a toks=()
+
+    PROJ_SEL=()
+    while true; do
+        tries=$(( tries + 1 ))
+        (( tries <= 5 )) || die "Project wajib diisi dengan nama atau ID yang valid."
+        ask answer "$prompt"
+        answer="$(trim "$answer")"
+        if [[ "$answer" == "?" ]]; then
+            print_projects
+            tries=$(( tries - 1 ))
+            continue
+        fi
+        if [[ -z "$answer" ]]; then
+            echo "${C_YELLOW}⚠️  Project wajib diisi (ketik ? untuk melihat daftar).${C_RESET}"
+            continue
+        fi
+
+        if (( multi )); then
+            IFS=',' read -ra toks <<< "$answer"
+        else
+            toks=("$answer")
+        fi
+
+        PROJ_SEL=()
+        ok=1
+        for tok in "${toks[@]}"; do
+            tok="$(trim "$tok")"
+            [[ -n "$tok" ]] || continue
+            if find_project "$tok"; then
+                [[ " ${PROJ_SEL[*]} " == *" $PIDX "* ]] || PROJ_SEL+=("$PIDX")
+            else
+                echo "${C_YELLOW}⚠️  $PERR${C_RESET}"
+                ok=0
+            fi
+        done
+        if (( ok && ${#PROJ_SEL[@]} > 0 )); then
+            for tok in "${PROJ_SEL[@]}"; do
+                echo "   → ${PROJ_NAMES[$tok]} [${PROJ_DOMAINS[$tok]}] ${PROJ_IDS[$tok]}"
+            done
+            return 0
+        fi
+    done
 }
 
 project_label() {
@@ -1062,16 +1115,18 @@ select_visibility() {
     local -a vis=(public private shared community)
     local -a labels=(
         "public     terlihat dan bisa dipakai semua project"
-        "private    hanya project owner"
-        "shared     project owner + project penerima (member)"
+        "private    hanya project owner (input nama/ID project)"
+        "shared     project owner + project penerima (input nama/ID project)"
         "community  bisa dipakai semua project, tidak muncul di daftar default"
     )
     local i p
 
     if [[ -z "$VISIBILITY" ]]; then
-        pick "Visibility image" 0 "${labels[@]}" || die "Visibility wajib dipilih."
-        VISIBILITY="${vis[${PICKED[0]}]}"
+        menu_choice "Visibility image" "" "${labels[@]}"
+        VISIBILITY="${vis[$MENU_IDX]}"
+        log_event INPUT "visibility=$VISIBILITY" via=menu
     fi
+    echo "👁️  Visibility: $VISIBILITY"
 
     load_projects
     current_project
@@ -1091,10 +1146,8 @@ select_visibility() {
             if (( ${#PROJECT_ARGS[@]} == 1 )); then
                 resolve_project "${PROJECT_ARGS[0]}"
             else
-                local -a labels_p=()
-                for i in "${!PROJ_IDS[@]}"; do labels_p+=("$(project_label "$i")"); done
-                pick "Project owner image private" 0 "${labels_p[@]}" || die "Project owner wajib dipilih."
-                PIDX="${PICKED[0]}"
+                ask_projects 0 "Project owner (nama atau ID; ? = daftar project): "
+                PIDX="${PROJ_SEL[0]}"
             fi
             OWNER_ID="${PROJ_IDS[$PIDX]}"
             OWNER_NAME="${PROJ_NAMES[$PIDX]}"
@@ -1103,17 +1156,16 @@ select_visibility() {
             [[ "$CUR_PROJECT_ID" != "-" ]] || \
                 die "Project credentials aktif tidak bisa ditentukan (OS_PROJECT_ID/OS_PROJECT_NAME); dibutuhkan untuk image shared."
             if (( ${#PROJECT_ARGS[@]} > 0 )); then
-                PICKED=()
+                PROJ_SEL=()
                 for p in "${PROJECT_ARGS[@]}"; do
                     resolve_project "$p"
-                    PICKED+=("$PIDX")
+                    PROJ_SEL+=("$PIDX")
                 done
             else
-                local -a labels_p=()
-                for i in "${!PROJ_IDS[@]}"; do labels_p+=("$(project_label "$i")"); done
-                pick "Project penerima image shared" 1 "${labels_p[@]}" || die "Minimal satu project penerima wajib dipilih."
+                echo "   Owner image shared: $OWNER_NAME (project credentials aktif)"
+                ask_projects 1 "Project penerima (nama atau ID, pisahkan dengan koma; ? = daftar project): "
             fi
-            for i in "${PICKED[@]}"; do
+            for i in "${PROJ_SEL[@]}"; do
                 [[ "${PROJ_IDS[$i]}" == "$OWNER_ID" ]] && continue
                 [[ " ${RECIPIENT_IDS[*]} " == *" ${PROJ_IDS[$i]} "* ]] && continue
                 RECIPIENT_IDS+=("${PROJ_IDS[$i]}")
@@ -1272,8 +1324,8 @@ build_properties() {
 
     if [[ -z "$PRESET" ]]; then
         if (( INTERACTIVE )); then
-            pick "Preset properties" 0 "${labels[@]}" || PICKED=(0)
-            PRESET="${presets[${PICKED[0]}]}"
+            menu_choice "Preset properties" none "${labels[@]}"
+            PRESET="${presets[$MENU_IDX]}"
         else
             PRESET="none"
         fi

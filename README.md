@@ -334,7 +334,7 @@ bash images/upload-img.sh --file x.raw --name x --disk-format raw --visibility p
 | `--file PATH` / `--url URL` | Source (mutually exclusive). A local file must exist, be readable and not empty. A URL must be `http`/`https` and is only offered when the region supports the `web-download` import method |
 | `--name NAME` | Image name (interactive default: file/URL name without extension) |
 | `--disk-format FMT` | **Required.** Never detected or guessed (not from content, not from the extension). Interactively, a numbered menu (`raw qcow2 vmdk vhd vhdx vdi iso ploop`, not fzf) must be answered with a number or format name — no default, an empty answer is asked again. A `.img` file can be qcow2 or raw: check with `qemu-img info` yourself if unsure. Any value given here is passed to Glance as-is. Container format is always `bare` |
-| `--visibility V` | `public`, `private` (one owner project: `--project` or picker), `shared` (owned by the credentials' project; recipients: repeat `--project` or multi-select picker), `community` (usable by all projects, not listed by default) |
+| `--visibility V` | `public`, `private` (one owner project: `--project`, or typed name/ID), `shared` (owned by the credentials' project; recipients: repeat `--project`, or typed names/IDs separated by commas), `community` (usable by all projects, not listed by default). Interactively a numbered menu with **no default** |
 | `--project P` | Project name or ID (names that exist in several domains must use the ID) |
 | `--min-disk GB`, `--min-ram MB` | Default `--min-disk`: virtual size from `qemu-img` rounded up to GB |
 | `--preset P` | `linux` (`hw_qemu_guest_agent=yes`, `hw_disk_bus=virtio`, interactive: `os_distro`/`os_version`), `windows` (`os_type=windows`, `hw_qemu_guest_agent=yes`), `windows-uefi` (windows + `hw_firmware_type=uefi`, `hw_machine_type=q35`), `none` |
@@ -346,6 +346,9 @@ bash images/upload-img.sh --file x.raw --name x --disk-format raw --visibility p
 | `--dry-run` | Detection, validation, format/project selection, duplicate check and summary, plus the OpenStack commands that would run. No conversion, upload, sharing or rotation |
 | `-h`, `--help` | Show help |
 
+Choices (disk format, visibility, preset) use numbered menus that stay on screen — answer with a
+number or a name; disk format and visibility have no default. Project prompts accept a name or ID
+(`?` lists projects with their domain); unknown or ambiguous names are asked again.
 Run with arguments, only required values that are missing are asked for (source, name, disk format,
 visibility, projects, duplicate action). Optional values (conversion, min-disk/min-ram, preset,
 `os_distro`/`os_version`) are asked only when the script runs without arguments.
@@ -577,7 +580,7 @@ Category directories are discovered dynamically; add a directory to add a catego
 
 Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh` and `images/upload-img.sh` run
 against a stub OpenStack CLI (and a stub `qemu-img`; no cloud needed; requires `tmux`, `jq`, `flock`;
-`fzf` for the picker tests):
+`fzf` for the live-migrate picker test):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests

@@ -117,7 +117,7 @@ base_env() {
         "OSOPS_QEMU_IMG=$(printf '%q' "$QSTUB")" \
         "OSOPS_LOG_DIR=$(printf '%q' "$WORK/log")" \
         "TMPDIR=$(printf '%q' "$WORK/tmp")" \
-        OSOPS_NO_FZF=1 OS_REGION_NAME=RegionTest \
+        OS_REGION_NAME=RegionTest \
         OS_AUTH_URL=https://keystone.test:5000/v3 OS_PROJECT_NAME=admin \
         OS_PROJECT_DOMAIN_NAME=Default OS_USERNAME=admin "OS_PASSWORD=$SECRET_PW"
 }
@@ -354,8 +354,8 @@ test_format() {
 
     begin "format_manual"
     f="$(mk_file a.img)"
-    # fzf tersedia pun, format tetap lewat menu bernomor wajib (tanpa default)
-    run_tmux "OSOPS_NO_FZF=0" --file "$f" --name pick --visibility public
+    # format lewat menu bernomor wajib (tanpa default), bukan fzf
+    run_tmux "" --file "$f" --name pick --visibility public
     answer 'Disk format \[1-8' 1 "" || return 0
     wait_for 'Disk format wajib dipilih \(tidak ada default\)' 1 || return 0
     answer 'Disk format \[1-8' 2 abc || return 0
@@ -472,17 +472,25 @@ test_visibility() {
     begin "visibility_private"
     f="$(mk_file a.img)"
     run_tmux "" --file "$f" --name priv --disk-format raw --visibility private --interval 1
-    answer 'Pilih \[1-4\]' 1 2 || return 0          # proj-alpha (urut nama)
+    answer 'Project owner \(nama atau ID' 1 "" || return 0
+    wait_for 'Project wajib diisi' 1 || return 0
+    answer 'Project owner \(nama atau ID' 2 "?" || return 0
+    wait_for 'proj-gamma +\[dom-two\]' 1 || return 0
+    answer 'Project owner \(nama atau ID' 3 nope || return 0
+    wait_for 'Project tidak ditemukan: nope' 1 || return 0
+    answer 'Project owner \(nama atau ID' 4 proj-alpha || return 0
     answer 'Upload image ini' 1 y || return 0
     rc="$(tmux_exit)"
     expect_eq "exit 0" "$rc" "0"
-    expect_match "picker project dengan domain" "$(screen_text)" 'proj-gamma +\[dom-two\]'
+    expect_match "? menampilkan daftar project dengan domain" "$(screen_text)" 'proj-gamma +\[dom-two\]'
+    expect_match "project terpilih ditampilkan" "$(screen_text)" "→ proj-alpha \[Default\] $P_ALPHA"
+
     expect_match "private dengan --project owner" "$(create_call)" "--private --project $P_ALPHA "
     expect_match "owner di ringkasan" "$(screen_text)" "Owner +: proj-alpha \($P_ALPHA\)"
 
     begin "visibility_shared"
     run_tmux "" --file "$f" --name shr --disk-format raw --visibility shared --interval 1
-    answer 'Pilih nomor' 1 "2, 3" || return 0
+    answer 'Project penerima \(nama atau ID' 1 "proj-alpha, $P_BETA" || return 0
     answer 'Upload image ini' 1 y || return 0
     rc="$(tmux_exit)"
     s="$(screen_text)"
@@ -513,12 +521,24 @@ test_visibility() {
     expect_match "penjelasan community" "$(screen_text)" 'Community: image bisa dipakai oleh SEMUA project'
     expect_match "--community" "$(create_call)" '--community '
 
-    begin "visibility_picker"
+    begin "visibility_menu"
     run_tmux "" --file "$f" --name pub --disk-format raw --interval 1
-    answer 'Pilih \[1-4\]' 1 1 || return 0
+    answer 'Pilih \[1-4 atau nama\] \(wajib' 1 "" || return 0
+    wait_for 'Visibility image wajib dipilih \(tidak ada default\)' 1 || return 0
+    answer 'Pilih \[1-4 atau nama\] \(wajib' 2 private || return 0
+    answer 'Project owner \(nama atau ID' 1 "$P_BETA" || return 0
     answer 'Upload image ini' 1 y || return 0
     rc="$(tmux_exit)"
-    expect_match "public dari picker" "$(create_call)" '--public '
+    expect_eq "exit 0" "$rc" "0"
+    expect_match "menu visibility terlihat" "$(screen_text)" '2\. private +hanya project owner'
+    expect_match "private dari menu + owner dari ID" "$(create_call)" "--private --project $P_BETA "
+
+    begin "visibility_menu_public"
+    run_tmux "" --file "$f" --name pub --disk-format raw --interval 1
+    answer 'Pilih \[1-4 atau nama\] \(wajib' 1 1 || return 0
+    answer 'Upload image ini' 1 y || return 0
+    rc="$(tmux_exit)"
+    expect_match "public dari menu" "$(create_call)" '--public '
 
     run_direct -- --file "$f" --name x --disk-format raw --visibility public --project proj-alpha --dry-run
     expect_match "--project ditolak untuk public" "$RC $OUT" '^1 .*--project hanya untuk visibility private'
@@ -656,8 +676,8 @@ test_convert() {
     answer 'Konversi qcow2 → raw' 1 y || return 0
     answer 'Min disk \(GB\) \[default 2\]' 1 "" || return 0
     answer 'Min RAM' 1 "" || return 0
-    answer 'Pilih \[1-4\]' 1 1 || return 0                      # public
-    answer 'Pilih \[1-4\]' 2 2 || return 0                      # preset linux
+    answer 'Pilih \[1-4 atau nama\]' 1 1 || return 0             # public
+    answer 'Pilih \[1-4 atau nama\]' 2 linux || return 0         # preset linux
     answer 'os_distro' 1 ubuntu || return 0
     answer 'os_version' 1 "" || return 0
     answer 'Upload image ini' 1 y || return 0
@@ -678,8 +698,8 @@ test_convert() {
     answer 'Disk format \[1-8' 1 1 || return 0                      # raw
     answer 'Min disk' 1 "" || return 0
     answer 'Min RAM' 1 "" || return 0
-    answer 'Pilih \[1-4\]' 1 1 || return 0
-    answer 'Pilih \[1-4\]' 2 1 || return 0
+    answer 'Pilih \[1-4 atau nama\]' 1 1 || return 0
+    answer 'Pilih \[1-4 atau nama\] \(default none' 1 "" || return 0
     answer 'Upload image ini' 1 n || return 0
     rc="$(tmux_exit)"
     expect_no_match "konversi tidak ditawarkan untuk raw" "$(screen_text)" 'Konversi .*→ raw'
