@@ -345,29 +345,29 @@ test_format() {
     begin "format_picker"
     f="$(mk_file a.img)"
     run_tmux "" --file "$f" --name pick --visibility public
-    answer 'Pilih \[1-8\]' 1 2 || return 0
+    answer 'Disk format \[1-8' 1 2 || return 0
     answer 'Upload image ini' 1 y || return 0
     rc="$(tmux_exit)"
     expect_eq "exit 0" "$rc" "0"
     expect_match "qcow2 dari picker" "$(create_call)" '--disk-format qcow2 --container-format bare'
-    expect_match "picker dicatat" "$(log_text | grep 'disk_format=qcow2 via=picker')" 'INPUT'
+    expect_match "pilihan menu dicatat" "$(log_text | grep 'disk_format=qcow2 via=menu')" 'INPUT'
 
-    begin "format_fzf"
-    if command -v fzf >/dev/null 2>&1; then
-        f="$(mk_file a.img)"
-        run_tmux "OSOPS_NO_FZF=0" --file "$f" --name pick --visibility public
-        wait_for 'Disk format \(sesuai isi file' 1 || return 0
-        keys vhdx
-        sleep 0.5
-        keys Enter
-        answer 'Upload image ini' 1 y || return 0
-        rc="$(tmux_exit)"
-        expect_eq "exit 0" "$rc" "0"
-        expect_match "vhdx dari fzf" "$(create_call)" '--disk-format vhdx '
-        expect_true "qemu-img memakai nama format pilihan user" grep -q '^info -f vhdx --output=json' "$WORK/state/qemu.log"
-    else
-        echo "  ⏭️  fzf tidak ada, tes fzf dilewati"
-    fi
+    begin "format_manual"
+    f="$(mk_file a.img)"
+    # fzf tersedia pun, format tetap lewat menu bernomor wajib (tanpa default)
+    run_tmux "OSOPS_NO_FZF=0" --file "$f" --name pick --visibility public
+    answer 'Disk format \[1-8' 1 "" || return 0
+    wait_for 'Disk format wajib dipilih \(tidak ada default\)' 1 || return 0
+    answer 'Disk format \[1-8' 2 abc || return 0
+    wait_for 'Pilihan tidak valid: abc' 1 || return 0
+    answer 'Disk format \[1-8' 3 QCOW2 || return 0
+    answer 'Upload image ini' 1 y || return 0
+    rc="$(tmux_exit)"
+    expect_eq "exit 0" "$rc" "0"
+    expect_match "catatan ekstensi .img" "$(screen_text)" 'file .img bisa berisi qcow2 maupun raw'
+    expect_match "menu tetap terlihat di layar" "$(screen_text)" '2\. qcow2 +QEMU copy-on-write'
+    expect_match "nama format diterima" "$(create_call)" '--disk-format qcow2 '
+    expect_true "qemu-img memakai format pilihan user" grep -q '^info -f qcow2 --output=json' "$WORK/state/qemu.log"
 
     begin "format_option"
     f="$(mk_file a.img)"
@@ -375,7 +375,7 @@ test_format() {
     answer 'Upload image ini' 1 y || return 0
     rc="$(tmux_exit)"
     expect_match "--disk-format diteruskan apa adanya" "$(create_call)" '--disk-format foo-bar '
-    expect_true "tidak ada picker" bash -c "! grep -q 'Pilih \\[1-8\\]' <<< \"\$(tmux -L ui-test-$$ capture-pane -p -t t -S -500)\""
+    expect_true "tidak ada picker" bash -c "! grep -q 'Disk format \\[1-8' <<< \"\$(tmux -L ui-test-$$ capture-pane -p -t t -S -500)\""
 
     begin "format_reject"
     scenario create reject
@@ -393,7 +393,7 @@ test_format() {
     f="$WORK/disk.qcow2"
     head -c 4096 /dev/urandom > "$f"
     run_tmux "" --file "$f" --name ext --visibility public --dry-run
-    wait_for 'Pilih \[1-8\]' 1 || return 0
+    wait_for 'Disk format \[1-8' 1 || return 0
     expect_no_match "ekstensi .qcow2 tidak memilih format" "$(screen_text)" 'Format  :'
     keys 1 Enter
     rc="$(tmux_exit)"
@@ -652,7 +652,7 @@ test_convert() {
     answer 'Pilih \[1-2\]' 1 1 || return 0                       # sumber file
     answer 'Path file image' 1 "$f" || return 0
     answer 'Nama image' 1 "" || return 0                        # default dari nama file
-    answer 'Pilih \[1-8\]' 1 2 || return 0                      # qcow2
+    answer 'Disk format \[1-8' 1 2 || return 0                      # qcow2
     answer 'Konversi qcow2 → raw' 1 y || return 0
     answer 'Min disk \(GB\) \[default 2\]' 1 "" || return 0
     answer 'Min RAM' 1 "" || return 0
@@ -675,7 +675,7 @@ test_convert() {
     answer 'Pilih \[1-2\]' 1 1 || return 0
     answer 'Path file image' 1 "$f" || return 0
     answer 'Nama image' 1 rawimg || return 0
-    answer 'Pilih \[1-8\]' 1 1 || return 0                      # raw
+    answer 'Disk format \[1-8' 1 1 || return 0                      # raw
     answer 'Min disk' 1 "" || return 0
     answer 'Min RAM' 1 "" || return 0
     answer 'Pilih \[1-4\]' 1 1 || return 0

@@ -715,26 +715,52 @@ select_name() {
     log_event INPUT "name=$NAME"
 }
 
-# Disk format sepenuhnya pilihan user: tidak ada deteksi dan tidak ada default
+# Disk format sepenuhnya pilihan user: tidak ada deteksi dan tidak ada default.
+# Sengaja menu bernomor (bukan fzf): kursor fzf selalu di item pertama sehingga
+# satu Enter langsung memilih "raw", dan picker hilang dari layar setelahnya.
 select_format() {
-    local -a labels=(
-        "raw      disk mentah tanpa format"
-        "qcow2    QEMU copy-on-write"
-        "vmdk     VMware"
-        "vhd      Hyper-V / Xen (VHD)"
-        "vhdx     Hyper-V (VHDX)"
-        "vdi      VirtualBox"
-        "iso      image CD/DVD"
-        "ploop    Virtuozzo"
+    local -a desc=(
+        "disk mentah tanpa format"
+        "QEMU copy-on-write"
+        "VMware"
+        "Hyper-V / Xen (VHD)"
+        "Hyper-V (VHDX)"
+        "VirtualBox"
+        "image CD/DVD"
+        "Virtuozzo"
     )
+    local answer i n=${#FORMATS[@]} tries=0
 
-    if [[ -z "$DISK_FORMAT" ]]; then
-        pick "Disk format (sesuai isi file; tidak dideteksi otomatis)" 0 "${labels[@]}" || \
-            die "Disk format wajib dipilih."
-        DISK_FORMAT="${FORMATS[${PICKED[0]}]}"
-        log_event INPUT "disk_format=$DISK_FORMAT" via=picker
-    else
+    if [[ -n "$DISK_FORMAT" ]]; then
         log_event INPUT "disk_format=$DISK_FORMAT" via=option
+    else
+        has_tty || die "Butuh terminal interaktif (/dev/tty) untuk input: Disk format (atau gunakan --disk-format)"
+        echo
+        echo "${C_BOLD}Disk format${C_RESET} — pilih sesuai ISI file (tidak dideteksi otomatis, tidak ada default)."
+        echo "  Ekstensi file tidak menentukan format: file .img bisa berisi qcow2 maupun raw."
+        if [[ "$SRC_KIND" == "file" ]]; then
+            echo "  Jika ragu, cek manual di terminal lain: qemu-img info $SRC_FILE"
+        fi
+        for i in "${!FORMATS[@]}"; do
+            printf '  %d. %-6s %s\n' $(( i + 1 )) "${FORMATS[$i]}" "${desc[$i]}"
+        done
+
+        while [[ -z "$DISK_FORMAT" ]]; do
+            tries=$(( tries + 1 ))
+            (( tries <= 5 )) || die "Disk format wajib dipilih."
+            ask answer "Disk format [1-$n atau nama format] (wajib): "
+            answer="$(trim "$answer")"
+            if [[ -z "$answer" ]]; then
+                echo "${C_YELLOW}⚠️  Disk format wajib dipilih (tidak ada default).${C_RESET}"
+            elif [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= n )); then
+                DISK_FORMAT="${FORMATS[$(( answer - 1 ))]}"
+            elif [[ " ${FORMATS[*]} " == *" ${answer,,} "* ]]; then
+                DISK_FORMAT="${answer,,}"
+            else
+                echo "${C_YELLOW}⚠️  Pilihan tidak valid: $answer${C_RESET}"
+            fi
+        done
+        log_event INPUT "disk_format=$DISK_FORMAT" via=menu
     fi
 
     UPLOAD_FORMAT="$DISK_FORMAT"

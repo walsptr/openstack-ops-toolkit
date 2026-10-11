@@ -333,7 +333,7 @@ bash images/upload-img.sh --file x.raw --name x --disk-format raw --visibility p
 |---|---|
 | `--file PATH` / `--url URL` | Source (mutually exclusive). A local file must exist, be readable and not empty. A URL must be `http`/`https` and is only offered when the region supports the `web-download` import method |
 | `--name NAME` | Image name (interactive default: file/URL name without extension) |
-| `--disk-format FMT` | **Required.** Never detected or guessed (not from content, not from the extension). The interactive picker lists `raw qcow2 vmdk vhd vhdx vdi iso ploop`; any value given here is passed to Glance as-is. Container format is always `bare` |
+| `--disk-format FMT` | **Required.** Never detected or guessed (not from content, not from the extension). Interactively, a numbered menu (`raw qcow2 vmdk vhd vhdx vdi iso ploop`, not fzf) must be answered with a number or format name — no default, an empty answer is asked again. A `.img` file can be qcow2 or raw: check with `qemu-img info` yourself if unsure. Any value given here is passed to Glance as-is. Container format is always `bare` |
 | `--visibility V` | `public`, `private` (one owner project: `--project` or picker), `shared` (owned by the credentials' project; recipients: repeat `--project` or multi-select picker), `community` (usable by all projects, not listed by default) |
 | `--project P` | Project name or ID (names that exist in several domains must use the ID) |
 | `--min-disk GB`, `--min-ram MB` | Default `--min-disk`: virtual size from `qemu-img` rounded up to GB |
