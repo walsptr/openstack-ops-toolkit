@@ -1,0 +1,96 @@
+#!/bin/bash
+# Stub curl untuk tests/list-instances-by-host (dipakai lewat OSOPS_CURL).
+# Mensimulasikan Nova API: GET /v2.1/servers/detail?all_tenants=1&host=...
+#
+# State di $STUB_STATE:
+#   curl.log        argv setiap pemanggilan
+#   curl_auth.log   "ok" / "missing" per pemanggilan (header token dari stdin -K -)
+#   curl_mv.log     microversion dari header OpenStack-API-Version
+#   scen/api        ok (default) | fail (HTTP 500)
+#   scen/api_page   ukuran halaman paksa dari server (default 0 = tanpa)
+#   scen/api_nofilter 1 = filter host diabaikan (semua server dikembalikan)
+#
+# Microversion < 2.47: flavor hanya {id} (seperti Nova lama). Link "next"
+# sengaja memakai host lain (http://proxy-internal:8774).
+
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubNOVAtokenRAHASIA-987654321"
+
+printf '%s\n' "$*" >> "$STUB_STATE/curl.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+out="" url="" cfg=""
+while (( $# > 0 )); do
+    case "$1" in
+        -K)  [[ "$2" == "-" ]] && cfg="$(cat)"; shift 2 ;;
+        -o)  out="$2"; shift 2 ;;
+        --connect-timeout|--max-time|--cacert|--cert|--key) shift 2 ;;
+        -*)  shift ;;
+        *)   url="$1"; shift ;;
+    esac
+done
+
+if [[ "$cfg" == *"header = \"X-Auth-Token: $TOKEN\""* ]]; then
+    echo ok >> "$STUB_STATE/curl_auth.log"
+else
+    echo missing >> "$STUB_STATE/curl_auth.log"
+    echo "curl: (22) The requested URL returned error: 401" >&2
+    exit 22
+fi
+mv="$(sed -n 's/^header = "OpenStack-API-Version: compute \([0-9.]*\)"$/\1/p' <<< "$cfg")"
+echo "${mv:-none}" >> "$STUB_STATE/curl_mv.log"
+
+if [[ "$(scen api ok)" == "fail" ]]; then
+    echo "curl: (22) The requested URL returned error: 500" >&2
+    exit 22
+fi
+
+path="${url%%\?*}"
+query=""
+[[ "$url" == *\?* ]] && query="${url#*\?}"
+qjson="$(jq -Rn --arg q "$query" '$q | split("&") | map(select(length > 0) | split("=") | [.[0], (.[1:] | join("=") | @text)])')"
+
+servers() {
+    if [[ -f "$STUB_STATE/servers.json" ]]; then cat "$STUB_STATE/servers.json"; else cat "$FIX/servers.json"; fi
+}
+
+case "$path" in
+    https://nova.test:8774/v2.1/servers/detail)
+        body="$(servers | jq --argjson q "$qjson" --argjson force "$(scen api_page 0)" --arg mv "${mv:-2.1}" --argjson nf "$(scen api_nofilter 0)" '
+            def urldecode: gsub("%2E"; ".") | gsub("%2D"; "-") | gsub("%5F"; "_");
+            ($q | map(select(.[0] == "host") | .[1] | urldecode)[0]) as $host
+            | ($q | map(select(.[0] == "limit") | .[1] | tonumber)[0] // $force) as $limit
+            | ($q | map(select(.[0] == "marker") | .[1])[0] // null) as $marker
+            | ($mv | split(".") | .[1] | tonumber) as $minor
+            | [ .[] | select($nf == 1 or ."OS-EXT-SRV-ATTR:host" == $host)
+                    | if $minor < 47 then .flavor = { id: "flavor-id-small", links: [] } else . end ] | sort_by(.id) as $all
+            | (if $marker == null then $all else [ $all[] | select(.id > $marker) ] end) as $rest
+            | (if $limit > 0 then $rest[0:$limit] else $rest end) as $page
+            | { servers: $page }
+              + (if $limit > 0 and ($page | length) == $limit then
+                   { servers_links: [ { rel: "next",
+                       href: "http://proxy-internal:8774/v2.1/servers/detail?all_tenants=1&host=\($host)&limit=\($limit)&marker=\($page[-1].id)" } ] }
+                 else {} end)')"
+        ;;
+    *)
+        echo "curl: (22) The requested URL returned error: 404 ($url)" >&2
+        exit 22
+        ;;
+esac
+
+if [[ -n "$out" ]]; then
+    printf '%s\n' "$body" > "$out"
+else
+    printf '%s\n' "$body"
+fi

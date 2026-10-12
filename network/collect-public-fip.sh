@@ -64,6 +64,13 @@ if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib
 fi
 log_init
 
+# Akses API langsung (token lewat stdin curl, endpoint dari catalog)
+# shellcheck source=../lib/api.sh
+if ! source "$OSOPS_HOME/lib/api.sh" 2>/dev/null; then
+    echo "❌ lib/api.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+
 # ============================================================
 # Konfigurasi
 # ============================================================
@@ -88,7 +95,6 @@ else
     OS_CMD=(openstack)
 fi
 
-CURL="${OSOPS_CURL:-curl}"
 FZF="${OSOPS_FZF:-fzf}"
 COMPUTE_API_VERSION="${OSOPS_COMPUTE_API_VERSION:-2.1}"
 PAGE_LIMIT="${OSOPS_FIP_PAGE_LIMIT:-}"
@@ -102,13 +108,6 @@ XARGS_PID=""
 EXT_JSON="[]"
 SEL_IDS=()
 SEL_NAMES=()
-
-# Metode api (disiapkan sekali per run)
-API_STATE=""         # "" = belum dicoba | ok | fail
-API_REASON=""
-API_ENDPOINT=""
-API_TOKEN=""
-CURL_OPTS=()
 
 # Lookup project/instance (dimuat sekali per run, dipakai semua network)
 PROJECTS_STATE=""    # "" | ok | fail
@@ -249,8 +248,8 @@ require_deps() {
     command -v "${OS_CMD[0]}" >/dev/null 2>&1 || \
         die "OpenStack CLI tidak ditemukan: ${OS_CMD[0]}"
     command -v xargs >/dev/null 2>&1 || die "xargs tidak ditemukan (findutils)."
-    if [[ "$METHOD" == "api" ]] && ! command -v "$CURL" >/dev/null 2>&1; then
-        die "curl tidak ditemukan ($CURL); dibutuhkan untuk --method api."
+    if [[ "$METHOD" == "api" ]] && ! api_curl_available; then
+        die "curl tidak ditemukan ($API_CURL); dibutuhkan untuk --method api."
     fi
     return 0
 }
@@ -269,6 +268,7 @@ detect_region() {
 make_work_dir() {
     WORK_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/collect-public-fip.XXXXXX")" || \
         die "Gagal membuat direktori sementara di ${TMPDIR:-/tmp}."
+    API_WORK_DIR="$WORK_DIR"
 }
 
 # Dipanggil lib/logging.sh saat script keluar (normal, error, sinyal)
@@ -279,7 +279,7 @@ on_exit() {
     if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
         rm -rf "$WORK_DIR"
     fi
-    API_TOKEN=""
+    api_cleanup
     return 0
 }
 
@@ -489,116 +489,9 @@ fetch_list() {
 
 # --- metode api ---
 
-# Siapkan token, endpoint, dan opsi curl (sekali per run). Return 1 = tidak tersedia.
-api_setup() {
-    local json errf iface
-
-    case "$API_STATE" in
-        ok)   return 0 ;;
-        fail) return 1 ;;
-    esac
-    API_STATE="fail"
-
-    if ! command -v "$CURL" >/dev/null 2>&1; then
-        API_REASON="curl tidak tersedia"
-        return 1
-    fi
-
-    iface="${OS_INTERFACE:-${OS_ENDPOINT_TYPE:-public}}"
-    iface="${iface%URL}"
-    iface="${iface,,}"
-
-    errf="$WORK_DIR/catalog.err"
-    if ! json="$(os_cli catalog show network -f json 2>"$errf")"; then
-        API_REASON="catalog show network gagal: $(last_error_line "$errf")"
-        return 1
-    fi
-    API_ENDPOINT="$(jq -r --arg r "${OS_REGION_NAME:-}" --arg i "$iface" '
-        [ (.endpoints // [])[]
-          | select((.interface // "") == $i)
-          | select($r == "" or (.region_id // .region // "") == $r) ] as $e
-        | if ($e | length) == 1 or (($e | length) > 1 and $r != "") then $e[0].url
-          elif ($e | length) > 1 and ([ $e[] | (.region_id // .region) ] | unique | length) == 1 then $e[0].url
-          else empty end' <<< "$json" 2>/dev/null)" || API_ENDPOINT=""
-    if [[ -z "$API_ENDPOINT" ]]; then
-        API_REASON="endpoint network (interface=$iface, region=${OS_REGION_NAME:--}) tidak ditemukan di catalog"
-        return 1
-    fi
-    API_ENDPOINT="${API_ENDPOINT%/}"
-    [[ "$API_ENDPOINT" == */v2.0 ]] || API_ENDPOINT="$API_ENDPOINT/v2.0"
-
-    errf="$WORK_DIR/token.err"
-    if ! json="$(os_cli token issue -f json 2>"$errf")"; then
-        API_REASON="token issue gagal: $(last_error_line "$errf")"
-        return 1
-    fi
-    API_TOKEN="$(jq -r '.id // empty' <<< "$json" 2>/dev/null)" || API_TOKEN=""
-    json=""
-    if [[ -z "$API_TOKEN" ]]; then
-        API_REASON="token issue tidak mengembalikan token"
-        return 1
-    fi
-
-    CURL_OPTS=(--silent --show-error --fail --connect-timeout 15 --max-time 300)
-    [[ -n "${OS_CACERT:-}" ]] && CURL_OPTS+=(--cacert "$OS_CACERT")
-    [[ -n "${OS_CERT:-}" ]] && CURL_OPTS+=(--cert "$OS_CERT")
-    [[ -n "${OS_KEY:-}" ]] && CURL_OPTS+=(--key "$OS_KEY")
-    [[ "${OS_INSECURE:-}" =~ ^([Tt]rue|1|[Yy]es)$ ]] && CURL_OPTS+=(--insecure)
-
-    log_event API_SETUP "endpoint=$API_ENDPOINT" "interface=$iface" \
-        "cacert=${OS_CACERT:+yes}" "insecure=${OS_INSECURE:-no}"
-    API_STATE="ok"
-    return 0
-}
-
-# api_get URL OUT — token lewat config curl di stdin (tidak terlihat di ps, tidak di file)
-api_get() {
-    local url="$1" out="$2" errf="$2.err"
-    if ! printf 'header = "X-Auth-Token: %s"\nheader = "Accept: application/json"\n' "$API_TOKEN" |
-            "$CURL" "${CURL_OPTS[@]}" -K - -o "$out" "$url" 2>"$errf"; then
-        API_REASON="request API gagal: $(last_error_line "$errf")"
-        return 1
-    fi
-    return 0
-}
-
-# Ikuti pagination: query string link "next" dipakai di endpoint dari catalog
-# (link dari Neutron di belakang proxy bisa berisi host/scheme yang salah).
-# api_collect PATH QUERY KEY OUT
-api_collect() {
-    local path="$1" query="$2" key="$3" out="$4" page=0 url next prev_next="" got
-    local dir="$WORK_DIR/pages"
-    mkdir -p "$dir"
-    rm -f "$dir"/*
-
-    url="$API_ENDPOINT/$path?$query"
-    while true; do
-        page=$(( page + 1 ))
-        (( page <= 100000 )) || { API_REASON="pagination tidak berhenti"; return 1; }
-        api_get "$url" "$dir/$page.json" || return 1
-        if ! got="$(jq -r --arg k "$key" '(.[$k] | length), ([ (.[$k + "_links"] // [])[] | select(.rel == "next") | .href ][0] // "")' \
-                "$dir/$page.json" 2>/dev/null)"; then
-            API_REASON="respons API tidak valid (bukan JSON $key)"
-            return 1
-        fi
-        next="$(sed -n 2p <<< "$got")"
-        [[ -z "$next" || "$(head -n 1 <<< "$got")" == "0" || "$next" == "$prev_next" ]] && break
-        prev_next="$next"
-        [[ "$next" == *\?* ]] || break
-        url="$API_ENDPOINT/$path?${next#*\?}"
-    done
-
-    jq -s --arg k "$key" '[ .[] | .[$k][] ]' "$dir"/*.json > "$out" 2>/dev/null || {
-        API_REASON="gagal menggabungkan halaman API"
-        return 1
-    }
-    log_event API_FETCH "path=$path" "pages=$page" "count=$(jq length "$out")"
-    return 0
-}
-
 fetch_api() {
     local net="$1" out="$2" q
-    api_setup || return 1
+    api_setup network /v2.0 || return 1
     q="floating_network_id=$net"
     [[ -n "$PAGE_LIMIT" ]] && q+="&limit=$PAGE_LIMIT"
     api_collect floatingips "$q" floatingips "$out"
@@ -737,7 +630,7 @@ fill_port_details() {
     mkdir -p "$dir"
     echo '[]' > "$ports"
 
-    if [[ "$NET_METHOD" == "api" ]] || { [[ "$METHOD" != "cli" ]] && api_setup; }; then
+    if [[ "$NET_METHOD" == "api" ]] || { [[ "$METHOD" != "cli" ]] && api_setup network /v2.0; }; then
         local i q
         local -a batch_files=()
         for (( i = 0; i < n; i += PORT_BATCH )); do
@@ -1018,7 +911,7 @@ main() {
     echo "       Collect Public Floating IPs"
     echo "========================================"
 
-    log_event OPTIONS "os_cmd=${OS_CMD[*]}" "curl=$CURL" "compute_api=$COMPUTE_API_VERSION" \
+    log_event OPTIONS "os_cmd=${OS_CMD[*]}" "curl=$API_CURL" "compute_api=$COMPUTE_API_VERSION" \
         "page_limit=${PAGE_LIMIT:--}"
 
     LOG_EXIT_HOOK=on_exit

@@ -1,0 +1,132 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/list-instances-by-host (dipakai lewat OSOPS_OS_CMD).
+# Hanya perintah read-only yang dikenali; perintah lain dicatat dan exit 2.
+#
+# State di $STUB_STATE:
+#   calls.log        setiap pemanggilan (argv)
+#   compute_version  microversion dari --os-compute-api-version terakhir
+#   servers.json     override fixtures/servers.json (opsional)
+#   scen/<nama>      skenario (tidak ada = default)
+#
+# Skenario:
+#   compute_max   maksimum compute microversion (default 2.96)
+#   list_noproj   1 = "server list" tanpa kolom Project ID (output tidak lengkap)
+#   list          ok (default) | fail
+#   show_fail     <server id> yang "server show"-nya gagal (HTTP 503)
+#   show_gone     <server id> yang sudah terhapus (not found)
+#   show_moved    <server id> yang sudah pindah host saat show
+#   show_slow     detik jeda per "server show" (untuk Ctrl-C)
+#   catalog       ok (default) | fail
+#   token         ok (default) | fail
+#   projects      ok (default) | fail
+#   domains       ok (default) | fail
+#   services      ok (default) | fail
+
+# Filter jq memakai $var di dalam kutip tunggal (disengaja)
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubNOVAtokenRAHASIA-987654321"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+servers() {
+    if [[ -f "$STUB_STATE/servers.json" ]]; then cat "$STUB_STATE/servers.json"; else cat "$FIX/servers.json"; fi
+}
+
+if [[ "${1:-}" == "--os-compute-api-version" ]]; then
+    echo "$2" > "$STUB_STATE/compute_version"
+    shift 2
+fi
+
+case "$*" in
+    "compute service list --service nova-compute --long -f json")
+        [[ "$(scen services ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        cat "$FIX/services.json"
+        ;;
+
+    "versions show --service compute -f json")
+        jq -n --arg m "$(scen compute_max 2.96)" '[
+            {"Region Name": "RegionTest", "Service Type": "compute", "Version": "2.0", "Status": "DEPRECATED", "Min Microversion": null, "Max Microversion": null},
+            {"Region Name": "RegionTest", "Service Type": "compute", "Version": "2.1", "Status": "CURRENT", "Min Microversion": "2.1", "Max Microversion": $m}]'
+        ;;
+
+    "server list "*)
+        # Simulasi bug OSC 7.1.2: --host selalu menghasilkan list kosong
+        if [[ " $* " == *" --host "* ]]; then
+            echo '[]'
+            exit 0
+        fi
+        [[ "$(scen list ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        servers | jq --argjson np "$(scen list_noproj 0)" '
+            [ .[] | { ID: .id, Name: .name, "Project ID": .tenant_id, Status: .status,
+                      "Power State": ."OS-EXT-STS:power_state", "Availability Zone": ."OS-EXT-AZ:availability_zone",
+                      Host: ."OS-EXT-SRV-ATTR:host" }
+                  | if $np == 1 then del(."Project ID") else . end ]'
+        ;;
+
+    "server show "*)
+        id="$3"
+        sleep "$(scen show_slow 0)"
+        if [[ "$(scen show_fail -)" == "$id" ]]; then
+            echo "HttpException: 503: Server Error for url: https://nova.test:8774/v2.1/servers/$id" >&2
+            exit 1
+        fi
+        if [[ "$(scen show_gone -)" == "$id" ]]; then
+            echo "No server with a name or ID of '$id' exists." >&2
+            exit 1
+        fi
+        # Format OSC "server show -f json": project_id, addresses tanpa tipe (list string)
+        out="$(servers | jq --arg i "$id" --arg moved "$(scen show_moved -)" '
+            [ .[] | select(.id == $i) ][0] // empty
+            | . + { project_id: .tenant_id }
+            | del(.tenant_id)
+            | .addresses |= with_entries(.value |= map(.addr))
+            | if .id == $moved then ."OS-EXT-SRV-ATTR:host" = "somewhere-else" else . end')"
+        [[ -n "$out" ]] || { echo "No server with a name or ID of '$id' exists." >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "floating ip list -f json")
+        servers | jq '[ .[] | .addresses[]?[] | select(."OS-EXT-IPS:type" == "floating")
+                        | { ID: "f", "Floating IP Address": .addr, "Fixed IP Address": null, Port: null } ]'
+        ;;
+
+    "token issue -f json")
+        [[ "$(scen token ok)" == "fail" ]] && { echo "The request you have made requires authentication. (HTTP 401)" >&2; exit 1; }
+        jq -n --arg t "$TOKEN" '{expires: "2099-01-01T00:00:00+0000", id: $t, project_id: "p", user_id: "u"}'
+        ;;
+
+    "catalog show compute -f json")
+        [[ "$(scen catalog ok)" == "fail" ]] && { echo "Internal Server Error (HTTP 500)" >&2; exit 1; }
+        jq -n '{endpoints: [
+            {id: "e1", interface: "internal", region_id: "RegionTest", url: "http://nova.internal:8774/v2.1", region: "RegionTest"},
+            {id: "e2", interface: "public", region_id: "RegionTest", url: "https://nova.test:8774/v2.1", region: "RegionTest"}],
+            id: "s1", name: "nova", type: "compute"}'
+        ;;
+
+    "project list --long -f json")
+        [[ "$(scen projects ok)" == "fail" ]] && { echo "You are not authorized (HTTP 403)" >&2; exit 1; }
+        cat "$FIX/projects.json"
+        ;;
+
+    "domain list -f json")
+        [[ "$(scen domains ok)" == "fail" ]] && { echo "You are not authorized (HTTP 403)" >&2; exit 1; }
+        cat "$FIX/domains.json"
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

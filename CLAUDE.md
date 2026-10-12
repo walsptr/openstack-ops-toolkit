@@ -27,6 +27,7 @@ scripts.env.example   Example of the OPTIONAL local override file
 <category>/*.sh       Operational scripts (identity/, images/, network/, servers/, volumes/, ...)
 lib/                  Shared helpers for scripts — never listed in the TUI
 lib/logging.sh        Mandatory logging library (sourced by every script and by main.sh)
+lib/api.sh            Shared helper for direct API access with curl (token on stdin, catalog endpoint, pagination)
 tests/<name>/         Test runners, stub CLIs, fixtures — never listed in the TUI, never installed
 .shellcheckrc         shellcheck settings (source paths relative to each script)
 log/                  Runtime logs (not tracked by git): toolkit.log + log/<category>/<script>-YYYYMMDD.log
@@ -117,7 +118,7 @@ Every operational script logs through `lib/logging.sh`. Rules:
 
 ## Script conventions (OpenStack CLI, JSON, prompts)
 
-These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh` and `network/collect-public-fip.sh` and apply to every new script:
+These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`, `network/collect-public-fip.sh` and `servers/list-instances-by-host.sh` and apply to every new script:
 
 * **Call the OpenStack CLI through one wrapper:** an array `OS_CMD=(openstack)` (overridable with the env string `OSOPS_OS_CMD`, split with `read -ra`, because arrays cannot be exported) and a function `os_cli` (plus `os_run` = `log_run` for changing actions). Never call `openstack` directly elsewhere in the script. This keeps scripts testable with a stub and ready for RHOSO (`oc exec ... openstack`).
 * **Scripts that use the compute API: pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
@@ -134,10 +135,12 @@ These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `im
 * **Show the active region** (`OS_REGION_NAME`, auth host) in the summary before any action that changes resources.
 * **Mask credentials in URLs** (`user:pass@`, query parameters like `token`/`signature`/`key`) before they are shown or logged — including in commands logged as `CMD` and in API error messages. Mask each argument before shell-quoting it.
 * **Never capture or discard CLI progress output** (`--progress`, `qemu-img -p`): `$(...)` or redirecting stdout hides the bar (OSC only draws it when stdout is a TTY). Get IDs another way, e.g. reserve the image ID with `image create --id <uuid>`.
-* **OSC pitfalls (7.x):** `image create` looks the name up first and fails when more than one visible image has it; `image set --accept --project P` also changes the image owner to `P` (do not use it to accept on a member's behalf); without `--file`, `image create` reads image data from stdin when stdin is not a TTY (close it with `<&-`).
+* **OSC pitfalls (7.x):** `image create` looks the name up first and fails when more than one visible image has it; `image set --accept --project P` also changes the image owner to `P` (do not use it to accept on a member's behalf); without `--file`, `image create` reads image data from stdin when stdin is not a TTY (close it with `<&-`). `server list --host <host>` always returns an empty list with OSC 7.1.2 / openstacksdk 4.0.0 (the SDK filters again client-side on the wrong attribute): never trust it — use the API (`GET /servers/detail?host=`) or filter `server list --all-projects --long` by the `Host` column with `jq`.
 * **Large data sets: never one CLI call per item.** Fetch in bulk (one list call, or one API request per page) and join with `jq` (e.g. one `project list` / `server list --all-projects` as an ID → name map). Per-item calls are only a fallback, run in parallel (`xargs -P`, one output file per item, never interleaved stdout). `server list --limit` disables OSC pagination (only one page is returned): leave it out to get all pages.
 * **Always `-f json` for fields that are objects** (`port_details`, `fixed_ips`, ...): `-f value` prints a Python dict that `jq` cannot parse. OSC 7.x even formats some dicts as a string in `-f json` (`floating ip show` → `port_details` is `"device_owner='compute:nova', ..."`): accept both object and string.
 * **Tokens must never appear in process arguments (visible in `ps`) or in logs.** Pass them on stdin, e.g. `printf 'header = "X-Auth-Token: %s"\n' "$token" | curl -K - ...`; do not write them to files. `curl` is optional: only use it where a CLI fallback exists, and honour `OS_CACERT`, `OS_CERT`/`OS_KEY`, `OS_INSECURE`. Take the endpoint from `catalog show <service>` for `OS_REGION_NAME`/`OS_INTERFACE`, and follow pagination links by query string on that endpoint (links can carry a wrong host behind a proxy).
+* **Direct API access must use the shared helper `lib/api.sh`** (`api_setup`, `api_get`, `api_collect`; source it after `lib/logging.sh`, set `API_WORK_DIR`, call `api_cleanup` in `LOG_EXIT_HOOK`). Do not re-implement token, endpoint, or pagination handling in a script.
+* **Output files meant as input for another script must follow that script's input format exactly** (e.g. `.ids` files for `servers/live-migrate.sh --file`: `#` comments, one ID per line) and be verified in the tests with that script's own parser.
 * **Output files with sensitive data** (project names, public IPs, ...) are created with permission `600` (`umask 077`) and `noclobber`, never overwriting an existing file. Temporary directories: `mktemp -d` under `umask 077`, removed in `LOG_EXIT_HOOK`.
 * **Instance ports: match `device_owner` by the prefix `compute:`** (the value is `compute:<availability-zone>`), never by `compute:nova` only.
 * **Known limitation (RHOSO):** `OSOPS_OS_CMD` only changes how the CLI is called; the toolkit's `OS_*` credentials are not passed into an `oc exec` pod, which needs its own `clouds.yaml`/environment. Document it, do not try to forward secrets.
@@ -189,6 +192,7 @@ bash tests/live-migrate/run.sh              # live-migrate tests (stub CLI, tmux
 bash tests/delete-volume/run.sh             # delete-volume tests (stub CLI, tmux)
 bash tests/upload-img/run.sh                # upload-img tests (stub CLI + stub qemu-img, tmux)
 bash tests/collect-public-fip/run.sh        # collect-public-fip tests (stub CLI + stub curl, tmux)
+bash tests/list-instances-by-host/run.sh    # list-instances-by-host tests (stub CLI + stub curl, tmux)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)

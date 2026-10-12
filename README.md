@@ -74,7 +74,7 @@ Optional:
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
 | `qemu-img` (qemu-img / qemu-utils) | *Upload Image*: virtual size (default `--min-disk`) and optional conversion to raw. Without it both are skipped |
-| `curl` | *Collect Public Floating IPs*: `--method api` (one Neutron API request per page). Without it `auto` falls back to `cli` |
+| `curl` | *Collect Public Floating IPs* and *List Instances by Host*: `--method api` (one API request per page, through `lib/api.sh`). Without it `auto` falls back to `cli` |
 | [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
 | `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
 
@@ -195,6 +195,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
+| List Instances by Host | servers | `servers/list-instances-by-host.sh` | no | Export instances on selected compute hosts to CSV (for maintenance notice) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
 | Delete Volume | volumes | `volumes/delete-volume.sh` | yes | Delete available Cinder volumes (single ID or list), including snapshots (--purge) |
 | Import Volume from NetApp | volumes | `volumes/import-vol-from-netapp.sh` | yes | Bring an existing NetApp volume under Cinder management (cinder manage) |
@@ -479,6 +480,100 @@ Audit: pattern, chosen networks, method and fallback reason, API pages and count
 Environment: `OSOPS_CURL`, `OSOPS_FZF` (command overrides), `OSOPS_COMPUTE_API_VERSION` (default
 `2.1`), `OSOPS_FIP_PAGE_LIMIT` (page size for the API, default none).
 
+### List Instances by Host (`servers/list-instances-by-host.sh`)
+
+Read-only preparation for compute maintenance: lists **all** instances (all projects) on the chosen
+compute hosts with their owner (project and domain), so customers can be notified before their VMs are
+moved. Per host it writes a CSV and an `.ids` file that is directly usable as input for
+`servers/live-migrate.sh --file`. It never migrates anything. Requires an admin role and `jq`; `curl`
+is optional.
+
+```bash
+# From the TUI: no arguments, hosts are picked interactively and extra columns are asked (default no).
+servers/list-instances-by-host.sh
+
+# Directly / from cron (no terminal: --host is required)
+servers/list-instances-by-host.sh --host compute-07 --output-dir /var/tmp/maint
+servers/list-instances-by-host.sh --host compute-07 --host compute-08 --extended
+```
+
+Maintenance flow:
+
+```bash
+# 1. List instances and owners on the host
+servers/list-instances-by-host.sh --host compute-07 --output-dir /var/tmp/maint
+# 2. Notify the customers: CSV grouped by Project Name (summary shows instances per project/domain)
+# 3. Move the VMs (after the maintenance notice), using the generated ID list
+servers/live-migrate.sh --file /var/tmp/maint/instances-compute-07-20261012-090000.ids
+```
+
+| Option | Meaning |
+|---|---|
+| `--host HOST` | Compute host (repeatable; skips the picker). Must be a `nova-compute` host; a unique short name (before the first dot) is accepted. Unknown or ambiguous hosts are skipped with a message (`SKIPPED` in the log) |
+| `--extended` | Extra columns after the six default ones |
+| `--output-dir PATH` | Output directory (default `/tmp`; must already exist) |
+| `--method M` | `auto` (default), `api`, or `cli` (see below) |
+| `--parallel N` | Parallel processes for the `cli` method (default 8, 1–64) |
+
+**Host selection.** All `nova-compute` services are shown — **no status filter**: a host under
+maintenance is often already `disabled`, and a broken host can be `down`. The picker (fzf multi-select
+with `TAB`, or a numbered menu accepting `1,3` / `all`) shows Host, Zone, Status, State, and the disabled
+reason. Each host gets its own files.
+
+**Data retrieval methods.** The method used (and the fallback reason) is shown and logged.
+
+| Method | How |
+|---|---|
+| `auto` | Default columns: one `server list --all-projects --long` for the **whole cloud** (filtered per host with `jq`, reused for every selected host), if it contains ID, name, and project ID. With `--extended` (flavor details and floating IP markers are not in `server list`) or an incomplete list: `api`; if `api` is not possible → `cli` |
+| `api` | `GET /servers/detail?all_tenants=1&host=<host>` (host filtered by Nova) with `curl` through `lib/api.sh`, header `OpenStack-API-Version: compute 2.47` so flavor vCPU/RAM/name are embedded (no flavor lookup, works for deleted flavors), following `servers_links` |
+| `cli` | IDs from the whole-cloud `server list`, then `server show -f json` per instance in parallel (`xargs -P`) with progress; one `floating ip list` marks floating addresses |
+
+`openstack server list --host` is **not** used: with OSC 7.1.2 / openstacksdk 4.0.0 it always returns an
+empty list (the SDK filters again on the client side on the wrong attribute). All methods fetch every
+page (Nova returns at most 1000 servers per request by default). If the cloud's maximum compute
+microversion is below 2.47, 2.1 is used: the Flavor column then holds the flavor ID and vCPU/RAM stay
+empty (with a warning).
+
+**Owners.** One `project list --long` and one `domain list`, joined with `jq`. Orphan instances (project
+deleted, VM still there) → Project Name `(not found)`, empty domain; unknown domain → `(not found)`.
+If the project or domain lookup fails the cells say `(lookup failed)` and the host is `FAILED`.
+
+**CSV.** `<output-dir>/instances-<host>-<YYYYmmdd-HHMMSS>.csv` (host name sanitized), permission `600`,
+never overwritten, rows produced with `jq @csv`, sorted by Project Name then Instance Name
+(case-insensitive). A host without instances still gets a header-only CSV.
+
+```
+Instance ID,Instance Name,Project ID,Project Name,Domain ID,Domain Name
+```
+
+With `--extended`, appended after the six default columns:
+
+```
+Status,Power State,Flavor,vCPU,RAM (MB),IP Addresses,Availability Zone
+```
+
+Power State is text (`Running`, `Shutdown`, `Paused`, `Crashed`, `Suspended`, `NOSTATE`); IP Addresses
+are grouped per network with a floating marker, e.g. `net-a: 10.0.0.5, 172.24.4.28 (floating); net-b: 192.168.1.9`.
+
+**`.ids` file.** Same base name with `.ids`, permission `600`: a comment line
+`# host=<host> generated=<ISO8601> count=<n> source=list-instances-by-host`, then one instance ID per line
+in CSV order — the format of `servers/live-migrate.sh --file` (verified in the tests with live-migrate's
+own parser).
+
+**Summary** per host: service status/state, method, duration, total instances, count per status (and per
+power state with `--extended`), a table of instances per project (Project Name, Domain Name, count —
+the customers to contact), the number of orphan instances (highlighted), the CSV and `.ids` paths with the
+`live-migrate.sh --file` hint, and a reminder that the data is a snapshot (VMs may be migrating). With
+several hosts, a grand total (instances, unique projects, orphans) follows. Exit code 1 when any host
+failed.
+
+Audit: chosen hosts, `--extended`, method and fallback reason, API pages, lookups, and one
+`RESULT action=list-instances-by-host` per host (`resource=<host>`, `count`, `orphans`, `file`,
+`ids_file`, `duration`, `msg`). Neither the token nor CSV contents are logged.
+
+Environment: `OSOPS_CURL`, `OSOPS_FZF` (command overrides), `OSOPS_COMPUTE_API_VERSION` (default
+`2.47`), `OSOPS_SERVER_PAGE_LIMIT` (page size for the API, default none).
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -641,7 +736,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Example of the optional local override file
 ├── CLAUDE.md               # Architecture and contribution guide
-├── lib/                    # Shared helpers for scripts (logging.sh), never listed in the TUI
+├── lib/                    # Shared helpers for scripts (logging.sh, api.sh), never listed in the TUI
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
@@ -653,8 +748,8 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 
 Category directories are discovered dynamically; add a directory to add a category.
 
-Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh` and
-`network/collect-public-fip.sh` run against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no
+Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`,
+`network/collect-public-fip.sh` and `servers/list-instances-by-host.sh` run against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no
 cloud needed; requires `tmux`, `jq`, `flock`; `fzf` for the picker tests):
 
 ```bash
@@ -663,6 +758,7 @@ bash tests/live-migrate/run.sh abort      # only tests whose name matches
 bash tests/delete-volume/run.sh
 bash tests/upload-img/run.sh
 bash tests/collect-public-fip/run.sh
+bash tests/list-instances-by-host/run.sh
 ```
 
 ## Troubleshooting

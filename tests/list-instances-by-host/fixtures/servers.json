@@ -1,0 +1,214 @@
+[
+  {
+    "id": "11111111-0000-4000-8000-000000000001",
+    "name": "Web-01",
+    "tenant_id": "a0000000000000000000000000000001",
+    "status": "ACTIVE",
+    "OS-EXT-STS:power_state": 1,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-b": [
+        {
+          "addr": "192.168.1.9",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ],
+      "net-a": [
+        {
+          "addr": "10.0.0.5",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        },
+        {
+          "addr": "172.24.4.28",
+          "OS-EXT-IPS:type": "floating",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000002",
+    "name": "db,01",
+    "tenant_id": "a0000000000000000000000000000001",
+    "status": "SHUTOFF",
+    "OS-EXT-STS:power_state": 4,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.6",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000003",
+    "name": "app \"quoted\"",
+    "tenant_id": "a0000000000000000000000000000002",
+    "status": "PAUSED",
+    "OS-EXT-STS:power_state": 3,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.7",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000004",
+    "name": "orphan-vm",
+    "tenant_id": "a0000000000000000000000000000009",
+    "status": "ACTIVE",
+    "OS-EXT-STS:power_state": 1,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {}
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000005",
+    "name": "zz",
+    "tenant_id": "a0000000000000000000000000000003",
+    "status": "SUSPENDED",
+    "OS-EXT-STS:power_state": 7,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.8",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000006",
+    "name": "Alpha",
+    "tenant_id": "a0000000000000000000000000000001",
+    "status": "ACTIVE",
+    "OS-EXT-STS:power_state": 1,
+    "OS-EXT-SRV-ATTR:host": "compute-a",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.9",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000007",
+    "name": "maint-vm",
+    "tenant_id": "a0000000000000000000000000000002",
+    "status": "ACTIVE",
+    "OS-EXT-STS:power_state": 1,
+    "OS-EXT-SRV-ATTR:host": "compute-b.example.com",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.10",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000008",
+    "name": "down-vm",
+    "tenant_id": "a0000000000000000000000000000001",
+    "status": "ERROR",
+    "OS-EXT-STS:power_state": 6,
+    "OS-EXT-SRV-ATTR:host": "compute-c",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {
+      "net-a": [
+        {
+          "addr": "10.0.0.11",
+          "OS-EXT-IPS:type": "fixed",
+          "version": 4
+        }
+      ]
+    }
+  },
+  {
+    "id": "11111111-0000-4000-8000-000000000009",
+    "name": "elsewhere",
+    "tenant_id": "a0000000000000000000000000000001",
+    "status": "ACTIVE",
+    "OS-EXT-STS:power_state": 1,
+    "OS-EXT-SRV-ATTR:host": "other-host",
+    "OS-EXT-AZ:availability_zone": "nova",
+    "flavor": {
+      "original_name": "m1.small",
+      "vcpus": 2,
+      "ram": 2048,
+      "disk": 20
+    },
+    "addresses": {}
+  }
+]
