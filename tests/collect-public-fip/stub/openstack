@@ -1,0 +1,148 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/collect-public-fip (dipakai lewat OSOPS_OS_CMD).
+# Hanya perintah read-only yang dikenali; perintah lain dicatat dan exit 2.
+#
+# State di $STUB_STATE:
+#   calls.log      setiap pemanggilan (argv)
+#   fips.json      override fixtures/fips.json (opsional)
+#   servers.json   override fixtures/servers.json (opsional)
+#   scen/<nama>    skenario (tidak ada = default)
+#
+# Skenario:
+#   list_full     1 = "floating ip list" memuat port_details/created_at/updated_at
+#   nodetails     1 = extension fip-port-details tidak aktif (tanpa port_details)
+#   show_fail     <fip id> yang "floating ip show"-nya gagal (HTTP 503)
+#   show_gone     <fip id> yang sudah terhapus (not found)
+#   show_slow     detik jeda per "floating ip show" (untuk Ctrl-C)
+#   catalog       ok (default) | fail | noregion (endpoint region lain)
+#   token         ok (default) | fail
+#   projects      ok (default) | fail
+#   servers       ok (default) | fail (server list dan server show 503)
+#   netlist       ok (default) | fail
+
+# Filter jq memakai $var di dalam kutip tunggal (disengaja)
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubTOKENrahasia-0123456789"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+fips() {
+    if [[ -f "$STUB_STATE/fips.json" ]]; then cat "$STUB_STATE/fips.json"; else cat "$FIX/fips.json"; fi
+}
+
+servers() {
+    if [[ -f "$STUB_STATE/servers.json" ]]; then cat "$STUB_STATE/servers.json"; else cat "$FIX/servers.json"; fi
+}
+
+# Port dari fixture FIP (untuk "port show")
+ports() {
+    fips | jq '[ .[] | select(.port_details != null)
+                | { id: .port_id, device_owner: .port_details.device_owner, device_id: .port_details.device_id } ]'
+}
+
+# Global option compute microversion
+if [[ "${1:-}" == "--os-compute-api-version" ]]; then
+    echo "$2" > "$STUB_STATE/compute_version"
+    shift 2
+fi
+
+case "$*" in
+    "network list --external --long -f json")
+        [[ "$(scen netlist ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        jq '[ .[] | select(."Router Type") ]' "$FIX/networks.json"
+        ;;
+
+    "floating ip list --network "*)
+        net="$5"
+        long=0
+        [[ " $* " == *" --long "* ]] && long=1
+        fips | jq --arg n "$net" --argjson long "$long" --argjson full "$(scen list_full 0)" '
+            [ .[] | select(.floating_network_id == $n)
+              | { ID: .id, "Floating IP Address": .floating_ip_address, "Fixed IP Address": .fixed_ip_address,
+                  Port: .port_id, "Floating Network": .floating_network_id, Project: .project_id }
+                + (if $long == 1 then { Router: .router_id, Status: .status, Description: "", Tags: [],
+                                        "DNS Name": "", "DNS Domain": "" } else {} end)
+                + (if $full == 1 then { port_details, created_at, updated_at } else {} end) ]'
+        ;;
+
+    "floating ip show "*)
+        id="$4"
+        sleep "$(scen show_slow 0)"
+        if [[ "$(scen show_fail -)" == "$id" ]]; then
+            echo "HttpException: 503: Server Error for url: https://neutron.test:9696/v2.0/floatingips/$id" >&2
+            exit 1
+        fi
+        if [[ "$(scen show_gone -)" == "$id" ]]; then
+            echo "No FloatingIP found for $id" >&2
+            exit 1
+        fi
+        # OSC memformat port_details sebagai string "k='v', ..." walaupun -f json
+        out="$(fips | jq --arg i "$id" --argjson nd "$(scen nodetails 0)" '
+            [ .[] | select(.id == $i) ][0] // empty
+            | if $nd == 1 then del(.port_details)
+              elif .port_details == null then .
+              else .port_details |= (to_entries | map("\(.key)=\u0027\(.value)\u0027") | join(", ")) end')"
+        [[ -n "$out" ]] || { echo "No FloatingIP found for $id" >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "port show "*)
+        id="$3"
+        out="$(ports | jq --arg i "$id" '[ .[] | select(.id == $i) ][0] // empty')"
+        [[ -n "$out" ]] || { echo "No Port found for $id" >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "token issue -f json")
+        [[ "$(scen token ok)" == "fail" ]] && { echo "The request you have made requires authentication. (HTTP 401)" >&2; exit 1; }
+        jq -n --arg t "$TOKEN" '{expires: "2099-01-01T00:00:00+0000", id: $t, project_id: "p", user_id: "u"}'
+        ;;
+
+    "catalog show network -f json")
+        case "$(scen catalog ok)" in
+            fail)     echo "Internal Server Error (HTTP 500)" >&2; exit 1 ;;
+            noregion) region="RegionLain" ;;
+            *)        region="RegionTest" ;;
+        esac
+        jq -n --arg r "$region" '{endpoints: [
+            {id: "e1", interface: "internal", region_id: $r, url: "http://neutron.internal:9696", region: $r},
+            {id: "e2", interface: "public", region_id: $r, url: "https://neutron.test:9696/", region: $r},
+            {id: "e3", interface: "admin", region_id: $r, url: "http://neutron.admin:9696", region: $r}],
+            id: "s1", name: "neutron", type: "network"}'
+        ;;
+
+    "project list -f json")
+        [[ "$(scen projects ok)" == "fail" ]] && { echo "You are not authorized (HTTP 403)" >&2; exit 1; }
+        cat "$FIX/projects.json"
+        ;;
+
+    "server list --all-projects -n -f json -c ID -c Name")
+        [[ "$(scen servers ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        servers
+        ;;
+
+    "server show "*)
+        id="$3"
+        [[ "$(scen servers ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        out="$(servers | jq --arg i "$id" '[ .[] | select(.ID == $i) ][0] // empty | {id: .ID, name: .Name, status: "ACTIVE"}')"
+        [[ -n "$out" ]] || { echo "No server with a name or ID of '$id' exists." >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,10 @@
+[
+  {"ID": "b0000000-0000-4000-8000-000000000001", "Name": "public", "Shared": false, "Subnets": ["c0000000-0000-4000-8000-0000000000a1", "c0000000-0000-4000-8000-0000000000a2"], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000002", "Name": "PUB-01", "Shared": true, "Subnets": ["c0000000-0000-4000-8000-0000000000b1"], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000003", "Name": "Public-Lab", "Shared": false, "Subnets": [], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000004", "Name": "pub-internal", "Shared": false, "Subnets": ["c0000000-0000-4000-8000-0000000000d1"], "Router Type": false},
+  {"ID": "b0000000-0000-4000-8000-000000000005", "Name": "provider-ext", "Shared": false, "Subnets": [], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000006", "Name": "dup-ext", "Shared": false, "Subnets": [], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000007", "Name": "dup-ext", "Shared": false, "Subnets": [], "Router Type": true},
+  {"ID": "b0000000-0000-4000-8000-000000000008", "Name": "pub ext/02", "Shared": false, "Subnets": [], "Router Type": true}
+]

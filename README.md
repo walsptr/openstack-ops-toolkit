@@ -74,6 +74,7 @@ Optional:
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
 | `qemu-img` (qemu-img / qemu-utils) | *Upload Image*: virtual size (default `--min-disk`) and optional conversion to raw. Without it both are skipped |
+| `curl` | *Collect Public Floating IPs*: `--method api` (one Neutron API request per page). Without it `auto` falls back to `cli` |
 | [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
 | `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
 
@@ -191,6 +192,7 @@ Generated with `bash main.sh --workdir . --list`:
 |---|---|---|---|---|
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
 | Upload Image | images | `images/upload-img.sh` | yes | Upload an image to Glance with progress, sharing, and checksum verification |
+| Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -404,6 +406,79 @@ bar is not (only upload start, end and duration). `RESULT` lines: `action=upload
 `rotate-image`, `cleanup-image`. Credentials in a URL (`user:pass@`, query parameters such as
 `token`, `signature`, `key`) are masked (`***`) on screen and in the log.
 
+### Collect Public Floating IPs (`network/collect-public-fip.sh`)
+
+Read-only. Collects **all** floating IPs allocated from the chosen public (external) networks — from
+every subnet of the network — and writes one CSV file per network. Built for hundreds to thousands of
+floating IPs: data is fetched in bulk and joined with `jq`, never one CLI call per floating IP (except
+the parallel `cli` method). Requires an admin role and `jq`; `curl` is optional.
+
+```bash
+# From the TUI: no arguments, networks are picked interactively.
+network/collect-public-fip.sh
+
+# Directly / from cron (no terminal: --network is required)
+network/collect-public-fip.sh --network public --output-dir /var/tmp/fip
+network/collect-public-fip.sh --network public --network PUB-01 --method cli --parallel 16
+```
+
+Cron example (load the RC file first; output and log paths must be writable by the cron user):
+
+```cron
+15 2 * * * . /root/adminrc && /opt/openstack-ops-toolkit/network/collect-public-fip.sh --network public --output-dir /var/tmp/fip
+```
+
+| Option | Meaning |
+|---|---|
+| `--network N` | Public network, name or ID (repeatable). Skips the picker and the pattern, but the network must be external; an ambiguous name is an error (use the ID) |
+| `--pattern TEXT` | Name pattern for the picker (jq regex, case-insensitive; default `pub`, so `pub`, `Pub`, `PUB-01`, `public` all match) |
+| `--output-dir PATH` | Output directory (default `/tmp`; must already exist) |
+| `--method M` | `auto` (default), `api`, or `cli` (see below) |
+| `--parallel N` | Parallel processes for the `cli` method (default 8, 1–64) |
+
+**Network selection.** `network list --external --long` is filtered by `--pattern`; internal networks
+never appear, even if their name matches. The picker (fzf multi-select with `TAB`, or a numbered menu
+accepting `1,3` / `all` when fzf is missing) shows name, ID, shared, and number of subnets. When nothing
+matches, all external networks are listed and the script exits with 1.
+
+**Data retrieval methods.** The method actually used (and the fallback reason) is shown and logged.
+
+| Method | How |
+|---|---|
+| `auto` | `floating ip list --long` if it already contains `port_details`, `created_at`, `updated_at` (it does not in OSC 7.1.2), otherwise `api`; if `api` is not possible (no `curl`, no endpoint, token error, HTTP error) → `cli` |
+| `api` | `GET /v2.0/floatingips?floating_network_id=<id>` with `curl`, following `floatingips_links` (`rel=next`). Token from `token issue`, endpoint from `catalog show network` for `OS_REGION_NAME` and `OS_INTERFACE` (default `public`). The token is passed to curl as a config on stdin (`-K -`), never as an argument or file, and never logged. `OS_CACERT`, `OS_CERT`/`OS_KEY`, `OS_INSECURE` are honoured |
+| `cli` | `floating ip list --network <id>` for the IDs, then `floating ip show -f json` per ID in parallel (`xargs -P`), with progress |
+
+If the region does not have the `fip-port-details` extension, port owners are fetched in bulk
+(`GET /v2.0/ports?id=...` in batches of 50, or parallel `port show` for `cli`).
+
+**Name resolution.** Project names: one `project list` (unknown → `<project_id> (not found)`).
+Instance names: for up to 20 unique instances `server show` per ID, otherwise one
+`server list --all-projects` (all pages; `--limit` is not used because it disables pagination).
+Deleted instances / orphan ports → `(not found)`. Instance ID and name are filled only when
+`port_details.device_owner` starts with `compute:` (any availability zone), independent of the floating
+IP status (a `DOWN` floating IP still shows its instance); routers, load balancers, and unassociated
+floating IPs leave both columns empty.
+
+**CSV.** `<output-dir>/fip-<network-name>-<YYYYmmdd-HHMMSS>.csv` (name sanitized), created with
+permission `600` and never overwritten. Rows are produced with `jq @csv` (commas and quotes escaped),
+sorted by IP address numerically; `Created At` / `Updated At` are the API values (ISO 8601).
+
+```
+Floating ID,Floating IP Address,Project Name,Status,Instance ID,Instance Name,Created At,Updated At
+```
+
+**Summary** per network: region, method, number of floating IPs per status, associated to an instance,
+to a non-instance (router/LB/...), unassociated, instances `(not found)`, duration, and CSV path. Exit
+code 1 when any network failed (incomplete data still produces a CSV, marked `FAILED` in the log).
+
+Audit: pattern, chosen networks, method and fallback reason, API pages and counts, lookups, and one
+`RESULT action=collect-public-fip` per network (`resource=<network_id>`, `name`, `method`, `count`,
+`file`, `duration`, `msg`). Neither the token nor CSV contents are logged.
+
+Environment: `OSOPS_CURL`, `OSOPS_FZF` (command overrides), `OSOPS_COMPUTE_API_VERSION` (default
+`2.1`), `OSOPS_FIP_PAGE_LIMIT` (page size for the API, default none).
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -578,15 +653,16 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 
 Category directories are discovered dynamically; add a directory to add a category.
 
-Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh` and `images/upload-img.sh` run
-against a stub OpenStack CLI (and a stub `qemu-img`; no cloud needed; requires `tmux`, `jq`, `flock`;
-`fzf` for the live-migrate picker test):
+Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh` and
+`network/collect-public-fip.sh` run against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no
+cloud needed; requires `tmux`, `jq`, `flock`; `fzf` for the picker tests):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
 bash tests/live-migrate/run.sh abort      # only tests whose name matches
 bash tests/delete-volume/run.sh
 bash tests/upload-img/run.sh
+bash tests/collect-public-fip/run.sh
 ```
 
 ## Troubleshooting

@@ -117,7 +117,7 @@ Every operational script logs through `lib/logging.sh`. Rules:
 
 ## Script conventions (OpenStack CLI, JSON, prompts)
 
-These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh` and `images/upload-img.sh` and apply to every new script:
+These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh` and `network/collect-public-fip.sh` and apply to every new script:
 
 * **Call the OpenStack CLI through one wrapper:** an array `OS_CMD=(openstack)` (overridable with the env string `OSOPS_OS_CMD`, split with `read -ra`, because arrays cannot be exported) and a function `os_cli` (plus `os_run` = `log_run` for changing actions). Never call `openstack` directly elsewhere in the script. This keeps scripts testable with a stub and ready for RHOSO (`oc exec ... openstack`).
 * **Scripts that use the compute API: pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
@@ -135,6 +135,11 @@ These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh` and 
 * **Mask credentials in URLs** (`user:pass@`, query parameters like `token`/`signature`/`key`) before they are shown or logged — including in commands logged as `CMD` and in API error messages. Mask each argument before shell-quoting it.
 * **Never capture or discard CLI progress output** (`--progress`, `qemu-img -p`): `$(...)` or redirecting stdout hides the bar (OSC only draws it when stdout is a TTY). Get IDs another way, e.g. reserve the image ID with `image create --id <uuid>`.
 * **OSC pitfalls (7.x):** `image create` looks the name up first and fails when more than one visible image has it; `image set --accept --project P` also changes the image owner to `P` (do not use it to accept on a member's behalf); without `--file`, `image create` reads image data from stdin when stdin is not a TTY (close it with `<&-`).
+* **Large data sets: never one CLI call per item.** Fetch in bulk (one list call, or one API request per page) and join with `jq` (e.g. one `project list` / `server list --all-projects` as an ID → name map). Per-item calls are only a fallback, run in parallel (`xargs -P`, one output file per item, never interleaved stdout). `server list --limit` disables OSC pagination (only one page is returned): leave it out to get all pages.
+* **Always `-f json` for fields that are objects** (`port_details`, `fixed_ips`, ...): `-f value` prints a Python dict that `jq` cannot parse. OSC 7.x even formats some dicts as a string in `-f json` (`floating ip show` → `port_details` is `"device_owner='compute:nova', ..."`): accept both object and string.
+* **Tokens must never appear in process arguments (visible in `ps`) or in logs.** Pass them on stdin, e.g. `printf 'header = "X-Auth-Token: %s"\n' "$token" | curl -K - ...`; do not write them to files. `curl` is optional: only use it where a CLI fallback exists, and honour `OS_CACERT`, `OS_CERT`/`OS_KEY`, `OS_INSECURE`. Take the endpoint from `catalog show <service>` for `OS_REGION_NAME`/`OS_INTERFACE`, and follow pagination links by query string on that endpoint (links can carry a wrong host behind a proxy).
+* **Output files with sensitive data** (project names, public IPs, ...) are created with permission `600` (`umask 077`) and `noclobber`, never overwriting an existing file. Temporary directories: `mktemp -d` under `umask 077`, removed in `LOG_EXIT_HOOK`.
+* **Instance ports: match `device_owner` by the prefix `compute:`** (the value is `compute:<availability-zone>`), never by `compute:nova` only.
 * **Known limitation (RHOSO):** `OSOPS_OS_CMD` only changes how the CLI is called; the toolkit's `OS_*` credentials are not passed into an `oc exec` pod, which needs its own `clouds.yaml`/environment. Document it, do not try to forward secrets.
 
 ## Development Standards
@@ -183,6 +188,7 @@ shellcheck -x main.sh install.sh */*.sh     # dev tool, no warnings allowed
 bash tests/live-migrate/run.sh              # live-migrate tests (stub CLI, tmux)
 bash tests/delete-volume/run.sh             # delete-volume tests (stub CLI, tmux)
 bash tests/upload-img/run.sh                # upload-img tests (stub CLI + stub qemu-img, tmux)
+bash tests/collect-public-fip/run.sh        # collect-public-fip tests (stub CLI + stub curl, tmux)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)
@@ -190,7 +196,7 @@ bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an
 
 Logging checks: after running scripts, inspect `./log/<category>/*.log` and `./log/toolkit.log` (format, `run_id` shared with `toolkit.log`); set `OSOPS_LOG_DIR` to a read-only directory to test the fallback warning; grep the log directory for the test RC file's `OS_PASSWORD` value (must return nothing).
 
-Scripts that call the OpenStack CLI through `os_cli` are tested with a stub CLI (`OSOPS_OS_CMD=tests/<name>/stub/openstack`) returning JSON fixtures, driven in tmux because prompts read `/dev/tty`. Other external tools are stubbed the same way through an override variable (e.g. `OSOPS_QEMU_IMG`). Put stubs and fixtures under `tests/<name>/` (stub without `.sh` extension, runner without `@name`). Behavior that only a real cloud shows (abort timing, CLI output format of other OSC versions) must be reported as not verified.
+Scripts that call the OpenStack CLI through `os_cli` are tested with a stub CLI (`OSOPS_OS_CMD=tests/<name>/stub/openstack`) returning JSON fixtures, driven in tmux because prompts read `/dev/tty`. Other external tools are stubbed the same way through an override variable (e.g. `OSOPS_QEMU_IMG`, `OSOPS_CURL`, `OSOPS_FZF`). Put stubs and fixtures under `tests/<name>/` (stub without `.sh` extension, runner without `@name`). Behavior that only a real cloud shows (abort timing, CLI output format of other OSC versions) must be reported as not verified.
 
 Override behavior can be tested with a temporary workdir containing a `scripts.env` (rename, `!path`, custom absolute path, old format). The TUI needs an interactive terminal; tmux (`send-keys` / `capture-pane`) works for scripted checks. A stub `openstack` command in `PATH` avoids touching a real cloud.
 
