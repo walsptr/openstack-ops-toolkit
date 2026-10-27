@@ -1,0 +1,96 @@
+#!/bin/bash
+# Stub curl untuk tests/get-ip-info (dipakai lewat OSOPS_CURL).
+# Mensimulasikan Neutron API: GET /v2.0/floatingips dan /v2.0/ports dengan
+# filter floating_ip_address, fixed_ip_address, fixed_ips=ip_address=, id.
+#
+# State di $STUB_STATE:
+#   curl.log        argv setiap pemanggilan
+#   curl_auth.log   "ok" / "missing" per pemanggilan (header token dari stdin -K -)
+#   scen/api        ok (default) | fail (HTTP 500)
+#   scen/api_page   ukuran halaman paksa (default 0 = tanpa pagination)
+#
+# Link "next" sengaja memakai host lain (http://proxy-internal:9696) untuk
+# memastikan script memakai endpoint dari catalog.
+
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubTOKENrahasia-0123456789"
+
+printf '%s\n' "$*" >> "$STUB_STATE/curl.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+out="" url="" cfg=""
+while (( $# > 0 )); do
+    case "$1" in
+        -K)  [[ "$2" == "-" ]] && cfg="$(cat)"; shift 2 ;;
+        -o)  out="$2"; shift 2 ;;
+        --connect-timeout|--max-time|--cacert|--cert|--key) shift 2 ;;
+        -*)  shift ;;
+        *)   url="$1"; shift ;;
+    esac
+done
+
+if [[ "$cfg" == *"header = \"X-Auth-Token: $TOKEN\""* ]]; then
+    echo ok >> "$STUB_STATE/curl_auth.log"
+else
+    echo missing >> "$STUB_STATE/curl_auth.log"
+    echo "curl: (22) The requested URL returned error: 401" >&2
+    exit 22
+fi
+
+if [[ "$(scen api ok)" == "fail" ]]; then
+    echo "curl: (22) The requested URL returned error: 500" >&2
+    exit 22
+fi
+
+path="${url%%\?*}"
+query=""
+[[ "$url" == *\?* ]] && query="${url#*\?}"
+
+# Query string → array [k, v] (decode %3A dan %3D)
+qjson="$(jq -Rn --arg q "$query" '$q | split("&") | map(select(length > 0) | split("=")
+    | [ .[0], (.[1:] | join("=") | gsub("%3A"; ":") | gsub("%3D"; "=")) ])')"
+
+case "$path" in
+    https://neutron.test:9696/v2.0/floatingips) key=floatingips; src="$FIX/fips.json" ;;
+    https://neutron.test:9696/v2.0/ports)       key=ports;       src="$FIX/ports.json" ;;
+    *)
+        echo "curl: (22) The requested URL returned error: 404 ($url)" >&2
+        exit 22
+        ;;
+esac
+
+body="$(jq --argjson q "$qjson" --arg key "$key" --argjson force "$(scen api_page 0)" --arg base "${path#https://neutron.test:9696}" '
+    def qv($k): [ $q[] | select(.[0] == $k) | .[1] ];
+    (qv("marker")[0] // null) as $marker
+    | [ .[]
+        | select((qv("floating_ip_address") | length) == 0 or (.floating_ip_address as $v | qv("floating_ip_address") | index($v)))
+        | select((qv("fixed_ip_address") | length) == 0 or (.fixed_ip_address as $v | qv("fixed_ip_address") | index($v)))
+        | select((qv("id") | length) == 0 or (.id as $v | qv("id") | index($v)))
+        | select((qv("fixed_ips") | length) == 0
+                 or ((qv("fixed_ips")[0] | ltrimstr("ip_address=")) as $ip | any(.fixed_ips[]; .ip_address == $ip))) ]
+    | sort_by(.id) as $all
+    | (if $marker == null then $all else [ $all[] | select(.id > $marker) ] end) as $rest
+    | (if $force > 0 then $rest[0:$force] else $rest end) as $page
+    | { ($key): $page }
+      + (if $force > 0 and ($page | length) == $force then
+           { ($key + "_links"): [ { rel: "next",
+               href: ("http://proxy-internal:9696\($base)?" + ([ $q[] | select(.[0] != "marker") | "\(.[0])=\(.[1])" ]
+                       + [ "marker=\($page[-1].id)" ] | join("&"))) } ] }
+         else {} end)' "$src")"
+
+if [[ -n "$out" ]]; then
+    printf '%s\n' "$body" > "$out"
+else
+    printf '%s\n' "$body"
+fi

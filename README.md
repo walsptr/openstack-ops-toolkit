@@ -74,7 +74,7 @@ Optional:
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
 | `qemu-img` (qemu-img / qemu-utils) | *Upload Image*: virtual size (default `--min-disk`) and optional conversion to raw. Without it both are skipped |
-| `curl` | *Collect Public Floating IPs* and *List Instances by Host*: `--method api` (one API request per page, through `lib/api.sh`). Without it `auto` falls back to `cli` |
+| `curl` | *Collect Public Floating IPs*, *List Instances by Host*, and *IP Information*: `--method api` (one API request per page, through `lib/api.sh`). Without it `auto` falls back to `cli` |
 | [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
 | `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
 
@@ -193,7 +193,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Assign User to Project | identity | `identity/assign-user-to-project.sh` | yes | Assign the member or admin role to a user on a project |
 | Upload Image | images | `images/upload-img.sh` | yes | Upload an image to Glance with progress, sharing, and checksum verification |
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
-| Floating IP Information | network | `network/get-float-ip-info.sh` | no | Look up a floating IP (or a list from a file, saved as CSV in /tmp) and show its project, domain, port, and server |
+| IP Information | network | `network/get-ip-info.sh` | no | Find who uses an IP: floating IPs and port fixed IPs (single IP or list) |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | List Instances by Host | servers | `servers/list-instances-by-host.sh` | no | Export instances on selected compute hosts to CSV (for maintenance notice) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -574,6 +574,95 @@ Audit: chosen hosts, `--extended`, method and fallback reason, API pages, lookup
 Environment: `OSOPS_CURL`, `OSOPS_FZF` (command overrides), `OSOPS_COMPUTE_API_VERSION` (default
 `2.47`), `OSOPS_SERVER_PAGE_LIMIT` (page size for the API, default none).
 
+### IP Information (`network/get-ip-info.sh`)
+
+Read-only lookup of **who uses an IP**: floating IPs and fixed IPs on ports (instance private IPs, router
+gateways/interfaces, DHCP, load balancer VIPs, ...) across all projects. Requires an admin role and `jq`;
+`curl` is optional. Replaces `network/get-float-ip-info.sh` (see *Rename* below).
+
+```bash
+# From the TUI: no arguments, input source (one IP / file) and CSV are asked.
+network/get-ip-info.sh
+
+# Directly / from cron
+network/get-ip-info.sh --ip 10.0.0.5
+network/get-ip-info.sh --ip 10.0.0.5 --ip 203.0.113.10 --project acme
+network/get-ip-info.sh --file ips.txt --csv --output-dir /var/tmp
+network/get-ip-info.sh --file ips.txt --deep --csv
+```
+
+| Option | Meaning |
+|---|---|
+| `--ip IP` | IP to look up (IPv4/IPv6, repeatable) |
+| `--file PATH` | One IP per line; `#` comments, blank lines, CRLF, and duplicates are handled |
+| `--network N`, `--project P` | Limit to a network / project (name or ID; ambiguous names are rejected) |
+| `--deep` | Also search allowed address pairs of all ports (exact address, or an IPv4 CIDR containing the IP) |
+| `--csv`, `--output-dir PATH` | Write a CSV (default directory `/tmp`) |
+| `--method auto\|api\|cli` | How ports and floating IPs are fetched (default `auto`: Neutron API with `curl`, otherwise CLI) |
+| `--parallel N` | Parallel `show` calls for the CLI method (default 8) |
+
+**Match types** — one IP can have several matches, all shown:
+
+| Match Type | Meaning |
+|---|---|
+| `FLOATING_IP` | A floating IP with this address, with its associated port, fixed IP, and device |
+| `FIXED_IP` | A port with this fixed IP, plus the floating IP associated to that port and IP |
+| `ALLOWED_ADDRESS_PAIR` | Only with `--deep`: a port that allows this address (exact or CIDR) |
+| `SUBNET_ONLY` | No port, but the IP is inside a subnet CIDR; *Device Type* says `No port (in allocation pool)`, `No port (outside allocation pool)`, or `No port (subnet gateway IP)` |
+| `NOT_FOUND` | No match and no subnet (IPv6 is not searched in subnets) |
+| `INVALID` | Not a valid IPv4/IPv6 address (not searched) |
+
+**Private IPs can match several times**: the same CIDR is often used in many projects, so `10.0.0.5`
+can be a VM in project A and a router port in project B. All matches are listed, each with its network,
+project, and domain. Narrow down with `--network` / `--project`.
+
+**Device type** comes from the port's `device_owner`: `compute:*` → `Instance` (name, status, compute
+host; `Load balancer amphora` when the server name starts with `amphora-`), `network:router_gateway` →
+`Router gateway`, `network:router_interface*` / `network:ha_router_replicated_interface` →
+`Router interface` (router name), `network:dhcp` → `DHCP`, `network:floatingip_agent_gateway` →
+`DVR FIP gateway`, `Octavia` → `Load balancer VIP` (load balancer name when the Octavia OSC plugin is
+installed, otherwise the port name, which contains the load balancer ID), `network:distributed` →
+`Distributed (metadata)`, empty → `Unattached port`, anything else as is. A floating IP without a port
+is `Not associated`. The rules live in `lib/netinfo.sh` and can be reused by other scripts.
+
+**Strategy**: up to 20 IPs are looked up one by one with server-side filters; more IPs fetch all
+floating IPs and ports once and match locally (with progress). Both give the same output (verified in
+the tests). With `--deep` all ports are always fetched; with the CLI method this means one `port show`
+per port — the script shows the number of ports and an estimate and asks for confirmation (in a
+terminal; without a terminal it only warns). Prefer the API method for `--deep`.
+
+**CSV** (`<output-dir>/ip-info-<YYYYmmdd-HHMMSS>.csv`, permission 600, never overwrites): one row per
+match in input order; an IP without a match is still one row.
+
+```
+Query IP,Match Type,Device Type,Device ID,Device Name,Compute Host,Port ID,MAC Address,Port Status,Network Name,Subnet CIDR,Fixed IP,Floating IP ID,Floating IP,Floating IP Status,Project ID,Project Name,Domain Name,Created At,Updated At
+```
+
+For `FLOATING_IP` rows the port columns (port, MAC, network, subnet, fixed IP) describe the associated
+port; for an unassociated floating IP *Network Name* is the floating IP's network. *Created/Updated* are
+those of the floating IP (`FLOATING_IP`) or port (`FIXED_IP`, `ALLOWED_ADDRESS_PAIR`).
+
+Exit code: 0 done; 1 on errors or incomplete lookups (marked `(lookup failed)`), and — as in the old
+script — when a single IP is `NOT_FOUND` or `INVALID`. Audit: input source and counts
+(valid/invalid/duplicate), filters, `--deep`, strategy and method, one `RESULT action=lookup` per IP
+(`matches`, `types`), and a `SUMMARY` with counts per match type, duration, and CSV path.
+
+Environment: `OSOPS_CURL`, `OSOPS_COMPUTE_API_VERSION` (default `2.1`), `OSOPS_IPINFO_PER_IP_MAX`
+(default 20), `OSOPS_IPINFO_STRATEGY` (`auto` / `per-ip` / `bulk`).
+
+**Rename** — this script was `network/get-float-ip-info.sh` (*Floating IP Information*), which only
+looked up floating IPs through an interactive menu. Mapping: menu *1. Single Floating IP* → `--ip IP`
+(or choose 1 in the prompt); *2. Floating IP List (file → CSV)* → `--file PATH --csv` (or choose 2; CSV
+defaults to yes). The CSV columns and file name (`floating-ip-info-*.csv` → `ip-info-*.csv`) changed.
+There is no compatibility shim at the old path:
+
+- direct calls of `network/get-float-ip-info.sh` must use `network/get-ip-info.sh`;
+- `./install.sh` removes the old installed copy (only paths listed in `RENAMED_SCRIPTS` /
+  `REMOVED_SCRIPTS` in `install.sh` are ever removed; other files, e.g. custom scripts, are kept) and
+  reports `scripts.env` entries that still point to the old path, with the replacement line — the file
+  itself is not changed. Without an update, such an entry shows `⚠️ script tidak ditemukan`;
+- old logs stay in `log/network/get-float-ip-info-*.log`; new runs log to `get-ip-info-*.log`.
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -583,7 +672,7 @@ Every script run is logged, whether it is started from the TUI or directly
 /opt/openstack-ops-toolkit/log/
 ├── toolkit.log                                   # launcher: sessions, runs, context switches
 ├── identity/assign-user-to-project-20261010.log  # one file per script per day (append)
-├── network/get-float-ip-info-20261010.log
+├── network/get-ip-info-20261010.log
 ├── servers/...
 └── volumes/...
 ```
@@ -720,7 +809,7 @@ See `scripts.env.example`.
 | `# comment` | Ignored (trailing comments too). |
 
 ```
-Floating IP Lookup,network/get-float-ip-info.sh          # rename
+IP Lookup,network/get-ip-info.sh                         # rename
 !volumes/import-vol-from-netapp.sh                       # hide on this server
 Site Backup Check,/usr/local/sbin/check-backup.sh        # custom script
 ```
@@ -736,7 +825,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Example of the optional local override file
 ├── CLAUDE.md               # Architecture and contribution guide
-├── lib/                    # Shared helpers for scripts (logging.sh, api.sh), never listed in the TUI
+├── lib/                    # Shared helpers for scripts (logging.sh, api.sh, netinfo.sh), never listed in the TUI
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
@@ -749,8 +838,9 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 Category directories are discovered dynamically; add a directory to add a category.
 
 Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`,
-`network/collect-public-fip.sh` and `servers/list-instances-by-host.sh` run against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no
-cloud needed; requires `tmux`, `jq`, `flock`; `fzf` for the picker tests):
+`network/collect-public-fip.sh`, `servers/list-instances-by-host.sh` and `network/get-ip-info.sh` run
+against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no cloud needed; requires `tmux`, `jq`,
+`flock`; `fzf` for the picker tests; the `get-ip-info` installer test uses `unshare -r`):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
@@ -759,6 +849,7 @@ bash tests/delete-volume/run.sh
 bash tests/upload-img/run.sh
 bash tests/collect-public-fip/run.sh
 bash tests/list-instances-by-host/run.sh
+bash tests/get-ip-info/run.sh
 ```
 
 ## Troubleshooting
@@ -772,6 +863,7 @@ bash tests/list-instances-by-host/run.sh
 | A script appears under `custom` | It is added by `scripts.env` with a path that discovery did not find — check the path |
 | DESCRIPTION shows `⚠️ script tidak ditemukan` | A `scripts.env` entry points to a file that does not exist |
 | Installer reports redundant `scripts.env` entries | They are now discovered automatically; remove those lines (optional) |
+| Installer reports `scripts.env` entries pointing to an old script path | The script was renamed (e.g. `network/get-float-ip-info.sh` → `network/get-ip-info.sh`); replace the line as suggested |
 | `Direktori log tidak bisa ditulis: ... — log dialihkan ke ...` | Your user cannot write to `log/`. Add the user to the log group (`sudo usermod -aG <group> <user>`, then log in again) or re-run `./install.sh --log-group <group>`. Until then, logs are in the fallback directory shown. |
 | `Live migration lain sedang berjalan` | Another `live-migrate.sh` run holds `log/servers/live-migrate.lock` (the holder is shown). Wait for it to finish |
 | `Delete volume lain sedang berjalan` | Another `delete-volume.sh` run holds `log/volumes/delete-volume.lock` (the holder is shown). Wait for it to finish |

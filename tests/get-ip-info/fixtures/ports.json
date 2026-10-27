@@ -1,0 +1,389 @@
+[
+ {
+  "id": "e0000000-0000-4000-8000-000000000001",
+  "name": "web-port",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:01",
+  "status": "ACTIVE",
+  "device_owner": "compute:nova",
+  "device_id": "50000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.5"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-01T10:00:00Z",
+  "updated_at": "2026-02-01T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000002",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000003",
+  "project_id": "a0000000000000000000000000000002",
+  "tenant_id": "a0000000000000000000000000000002",
+  "mac_address": "fa:16:3e:00:00:02",
+  "status": "ACTIVE",
+  "device_owner": "compute:az-2",
+  "device_id": "50000000-0000-4000-8000-000000000002",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000003",
+    "ip_address": "10.0.0.5"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-02T10:00:00Z",
+  "updated_at": "2026-02-02T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000003",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000001",
+  "project_id": "",
+  "tenant_id": "",
+  "mac_address": "fa:16:3e:00:00:03",
+  "status": "ACTIVE",
+  "device_owner": "network:router_gateway",
+  "device_id": "60000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000001",
+    "ip_address": "203.0.113.2"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-03T10:00:00Z",
+  "updated_at": "2026-02-03T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000004",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:04",
+  "status": "ACTIVE",
+  "device_owner": "network:router_interface",
+  "device_id": "60000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.1"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-04T10:00:00Z",
+  "updated_at": "2026-02-04T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000005",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000004",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:05",
+  "status": "ACTIVE",
+  "device_owner": "network:router_interface_distributed",
+  "device_id": "60000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000004",
+    "ip_address": "10.1.0.1"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-05T10:00:00Z",
+  "updated_at": "2026-02-05T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000006",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000003",
+  "project_id": "a0000000000000000000000000000002",
+  "tenant_id": "a0000000000000000000000000000002",
+  "mac_address": "fa:16:3e:00:00:06",
+  "status": "ACTIVE",
+  "device_owner": "network:ha_router_replicated_interface",
+  "device_id": "60000000-0000-4000-8000-000000000002",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000003",
+    "ip_address": "10.0.0.3"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-06T10:00:00Z",
+  "updated_at": "2026-02-06T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000007",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:07",
+  "status": "ACTIVE",
+  "device_owner": "network:dhcp",
+  "device_id": "dhcp1234-b0000000-0000-4000-8000-000000000002",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.4"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-07T10:00:00Z",
+  "updated_at": "2026-02-07T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000008",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000001",
+  "project_id": "",
+  "tenant_id": "",
+  "mac_address": "fa:16:3e:00:00:08",
+  "status": "ACTIVE",
+  "device_owner": "network:floatingip_agent_gateway",
+  "device_id": "agent-1",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000001",
+    "ip_address": "203.0.113.3"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-08T10:00:00Z",
+  "updated_at": "2026-02-08T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000009",
+  "name": "octavia-lb-70000000-0000-4000-8000-000000000001",
+  "network_id": "b0000000-0000-4000-8000-000000000004",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:09",
+  "status": "ACTIVE",
+  "device_owner": "Octavia",
+  "device_id": "lb-70000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000004",
+    "ip_address": "10.1.0.20"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-09T10:00:00Z",
+  "updated_at": "2026-02-09T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000010",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000004",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:0a",
+  "status": "ACTIVE",
+  "device_owner": "compute:nova",
+  "device_id": "50000000-0000-4000-8000-000000000003",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000004",
+    "ip_address": "10.1.0.21"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-10T10:00:00Z",
+  "updated_at": "2026-02-10T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000011",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:0b",
+  "status": "ACTIVE",
+  "device_owner": "network:distributed",
+  "device_id": "b0000000-0000-4000-8000-000000000002",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.6"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-11T10:00:00Z",
+  "updated_at": "2026-02-11T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000012",
+  "name": "spare",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:0c",
+  "status": "DOWN",
+  "device_owner": "",
+  "device_id": "",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.7"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-12T10:00:00Z",
+  "updated_at": "2026-02-12T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000013",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:0d",
+  "status": "ACTIVE",
+  "device_owner": "baremetal:none",
+  "device_id": "node-1",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.8"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-13T10:00:00Z",
+  "updated_at": "2026-02-13T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000014",
+  "name": "vrrp-port",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:0e",
+  "status": "ACTIVE",
+  "device_owner": "compute:nova",
+  "device_id": "50000000-0000-4000-8000-000000000004",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.20"
+   }
+  ],
+  "allowed_address_pairs": [
+   {
+    "ip_address": "10.0.0.100",
+    "mac_address": "fa:16:3e:00:00:0e"
+   },
+   {
+    "ip_address": "10.0.0.128/28",
+    "mac_address": "fa:16:3e:00:00:0e"
+   }
+  ],
+  "security_groups": [],
+  "created_at": "2026-01-14T10:00:00Z",
+  "updated_at": "2026-02-14T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000015",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000001",
+  "project_id": "",
+  "tenant_id": "",
+  "mac_address": "fa:16:3e:00:00:0f",
+  "status": "ACTIVE",
+  "device_owner": "network:floatingip",
+  "device_id": "f0000000-0000-4000-8000-000000000001",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000001",
+    "ip_address": "203.0.113.10"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-15T10:00:00Z",
+  "updated_at": "2026-02-15T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000016",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000002",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:10",
+  "status": "ACTIVE",
+  "device_owner": "compute:nova",
+  "device_id": "50000000-0000-4000-8000-000000000009",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000002",
+    "ip_address": "10.0.0.30"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-16T10:00:00Z",
+  "updated_at": "2026-02-16T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000017",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000005",
+  "project_id": "a0000000000000000000000000000001",
+  "tenant_id": "a0000000000000000000000000000001",
+  "mac_address": "fa:16:3e:00:00:11",
+  "status": "ACTIVE",
+  "device_owner": "compute:nova",
+  "device_id": "50000000-0000-4000-8000-000000000005",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000007",
+    "ip_address": "2001:db8::10"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-17T10:00:00Z",
+  "updated_at": "2026-02-17T10:00:00Z"
+ },
+ {
+  "id": "e0000000-0000-4000-8000-000000000018",
+  "name": "",
+  "network_id": "b0000000-0000-4000-8000-000000000001",
+  "project_id": "",
+  "tenant_id": "",
+  "mac_address": "fa:16:3e:00:00:12",
+  "status": "ACTIVE",
+  "device_owner": "network:floatingip",
+  "device_id": "f0000000-0000-4000-8000-000000000002",
+  "fixed_ips": [
+   {
+    "subnet_id": "c0000000-0000-4000-8000-000000000001",
+    "ip_address": "203.0.113.11"
+   }
+  ],
+  "allowed_address_pairs": [],
+  "security_groups": [],
+  "created_at": "2026-01-18T10:00:00Z",
+  "updated_at": "2026-02-18T10:00:00Z"
+ }
+]

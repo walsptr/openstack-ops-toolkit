@@ -1,0 +1,178 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/get-ip-info (dipakai lewat OSOPS_OS_CMD).
+# Hanya perintah read-only yang dikenali; perintah lain dicatat dan exit 2.
+# Fixture dalam bentuk Neutron/Nova API; dikonversi ke format kolom OSC 7.x.
+#
+# State di $STUB_STATE:
+#   calls.log      setiap pemanggilan (argv)
+#   scen/<nama>    skenario (tidak ada = default)
+#
+# Skenario:
+#   fixed_string    1 = "Fixed IP Addresses"/fixed_ips sebagai string "k='v', ..."
+#   pools_string    1 = "Allocation Pools" sebagai string "a-b,c-d"
+#   port_show_fail  <port id> yang "port show"-nya gagal (HTTP 503)
+#   port_show_gone  <port id> yang sudah terhapus (not found)
+#   fip_show_fail   <fip id> yang "floating ip show"-nya gagal
+#   subnets         ok (default) | fail
+#   projects        ok (default) | fail
+#   servers         ok (default) | fail
+#   lb              no (default: plugin Octavia tidak ada) | yes
+#   catalog / token ok (default) | fail
+#   port_list       ok (default) | fail
+
+# shellcheck disable=SC2016  # filter jq memakai $var di dalam kutip tunggal
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubTOKENrahasia-0123456789"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+fail503() { echo "HttpException: 503: Server Error for url: https://neutron.test:9696/v2.0/$1" >&2; exit 1; }
+
+# Nilai opsi dari argv: optval --flag ARGS...
+optval() {
+    local want="$1"
+    shift
+    while (( $# > 0 )); do
+        if [[ "$1" == "$want" ]]; then echo "${2:-}"; return 0; fi
+        shift
+    done
+    echo ""
+}
+
+FIXED_STR="$(scen fixed_string 0)"
+JQ_FMT='
+def sq: [39] | implode;
+def fixed: if $fs == 1 then map("ip_address=\(sq)\(.ip_address)\(sq), subnet_id=\(sq)\(.subnet_id)\(sq)") | join("\n") else . end;
+def aaps: if $fs == 1 then map("ip_address=\(sq)\(.ip_address)\(sq), mac_address=\(sq)\(.mac_address)\(sq)") | join("\n") else . end;
+'
+
+if [[ "${1:-}" == "--os-compute-api-version" ]]; then
+    echo "$2" > "$STUB_STATE/compute_version"
+    shift 2
+fi
+
+case "$*" in
+    "network list -f json")
+        cat "$FIX/networks.json"
+        ;;
+
+    "subnet list --long -f json")
+        [[ "$(scen subnets ok)" == "fail" ]] && fail503 subnets
+        jq --argjson ps "$(scen pools_string 0)" '[ .[] | { ID: .id, Name: .name, Network: .network_id, Subnet: .cidr,
+              Project: .project_id, DHCP: true, "Name Servers": [],
+              "Allocation Pools": (if $ps == 1 then (.allocation_pools | map("\(.start)-\(.end)") | join(","))
+                                   else .allocation_pools end),
+              "Host Routes": "", "IP Version": .ip_version, Gateway: .gateway_ip, "Service Types": [], Tags: [] } ]' \
+            "$FIX/subnets.json"
+        ;;
+
+    "project list --long -f json")
+        [[ "$(scen projects ok)" == "fail" ]] && { echo "You are not authorized (HTTP 403)" >&2; exit 1; }
+        cat "$FIX/projects.json"
+        ;;
+
+    "domain list -f json")
+        cat "$FIX/domains.json"
+        ;;
+
+    "router list -f json")
+        cat "$FIX/routers.json"
+        ;;
+
+    "floating ip list "*"--long -f json")
+        fa="$(optval --floating-ip-address "$@")"
+        fb="$(optval --fixed-ip-address "$@")"
+        jq --arg fa "$fa" --arg fb "$fb" '[ .[]
+            | select($fa == "" or .floating_ip_address == $fa) | select($fb == "" or .fixed_ip_address == $fb)
+            | { ID: .id, "Floating IP Address": .floating_ip_address, "Fixed IP Address": .fixed_ip_address,
+                Port: .port_id, "Floating Network": .floating_network_id, Project: .project_id,
+                Router: .router_id, Status: .status, Description: "", Tags: [], "DNS Name": "", "DNS Domain": "" } ]' \
+            "$FIX/fips.json"
+        ;;
+
+    "port list "*"--long -f json")
+        [[ "$(scen port_list ok)" == "fail" ]] && fail503 ports
+        fx="$(optval --fixed-ip "$@")"
+        fx="${fx#ip-address=}"
+        jq --arg fx "$fx" --argjson fs "$FIXED_STR" "$JQ_FMT"'[ .[]
+            | select($fx == "" or any(.fixed_ips[]; .ip_address == $fx))
+            | { ID: .id, Name: .name, "MAC Address": .mac_address, "Fixed IP Addresses": (.fixed_ips | fixed),
+                Status: .status, "Security Groups": [], "Device Owner": .device_owner, Tags: [] } ]' \
+            "$FIX/ports.json"
+        ;;
+
+    "floating ip show "*" -f json")
+        id="$4"
+        [[ "$(scen fip_show_fail -)" == "$id" ]] && fail503 "floatingips/$id"
+        out="$(jq --arg i "$id" '[ .[] | select(.id == $i) ][0] // empty
+            | . + { port_details: (if .port_id == null then null
+                                   else ([39] | implode) as $sq | "device_owner=\($sq)compute:nova\($sq), status=\($sq)ACTIVE\($sq)" end) }' "$FIX/fips.json")"
+        [[ -n "$out" ]] || { echo "No FloatingIP found for $id" >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "port show "*" -f json")
+        id="$3"
+        [[ "$(scen port_show_fail -)" == "$id" ]] && fail503 "ports/$id"
+        [[ "$(scen port_show_gone -)" == "$id" ]] && { echo "No Port found for $id" >&2; exit 1; }
+        out="$(jq --arg i "$id" --argjson fs "$FIXED_STR" "$JQ_FMT"'[ .[] | select(.id == $i) ][0] // empty
+            | del(.tenant_id) | .fixed_ips |= fixed | .allowed_address_pairs |= aaps' "$FIX/ports.json")"
+        [[ -n "$out" ]] || { echo "No Port found for $id" >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "server show "*" -f json")
+        id="$3"
+        [[ "$(scen servers ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        out="$(jq --arg i "$id" '[ .[] | select(.ID == $i) ][0] // empty
+            | { id: .ID, name: .Name, status: .Status, "OS-EXT-SRV-ATTR:host": .Host }' "$FIX/servers.json")"
+        [[ -n "$out" ]] || { echo "No server with a name or ID of '$id' exists." >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "server list --all-projects --long -n -f json -c ID -c Name -c Status -c Host")
+        [[ "$(scen servers ok)" == "fail" ]] && { echo "Service Unavailable (HTTP 503)" >&2; exit 1; }
+        cat "$FIX/servers.json"
+        ;;
+
+    "loadbalancer show --help")
+        [[ "$(scen lb no)" == "yes" ]] || { echo "Unknown command ['loadbalancer', 'show']" >&2; exit 1; }
+        echo "usage: openstack loadbalancer show [-h] <load_balancer>"
+        ;;
+
+    "loadbalancer show "*" -f json")
+        [[ "$(scen lb no)" == "yes" ]] || { echo "Unknown command ['loadbalancer', 'show']" >&2; exit 1; }
+        out="$(jq --arg i "$3" '[ .[] | select(.id == $i) ][0] // empty' "$FIX/loadbalancers.json")"
+        [[ -n "$out" ]] || { echo "Unable to locate $3 in loadbalancers" >&2; exit 1; }
+        printf '%s\n' "$out"
+        ;;
+
+    "token issue -f json")
+        [[ "$(scen token ok)" == "fail" ]] && { echo "The request you have made requires authentication. (HTTP 401)" >&2; exit 1; }
+        jq -n --arg t "$TOKEN" '{expires: "2099-01-01T00:00:00+0000", id: $t, project_id: "p", user_id: "u"}'
+        ;;
+
+    "catalog show network -f json")
+        [[ "$(scen catalog ok)" == "fail" ]] && { echo "Internal Server Error (HTTP 500)" >&2; exit 1; }
+        jq -n '{endpoints: [
+            {id: "e1", interface: "internal", region_id: "RegionTest", url: "http://neutron.internal:9696", region: "RegionTest"},
+            {id: "e2", interface: "public", region_id: "RegionTest", url: "https://neutron.test:9696/", region: "RegionTest"}],
+            id: "s1", name: "neutron", type: "network"}'
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

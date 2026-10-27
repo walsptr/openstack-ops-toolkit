@@ -8,8 +8,10 @@ set -o pipefail
 # OpenStack Ops Toolkit Installer
 # ============================================================
 
-INSTALL_DIR="/opt/openstack-ops-toolkit"
-BIN_PATH="/usr/local/bin/openstack-ops-toolkit"
+# Override hanya untuk staging/tes saat installer sudah berjalan sebagai root
+# (re-exec lewat sudo tidak meneruskan environment)
+INSTALL_DIR="${OSOPS_INSTALL_DIR:-/opt/openstack-ops-toolkit}"
+BIN_PATH="${OSOPS_BIN_PATH:-/usr/local/bin/openstack-ops-toolkit}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -18,6 +20,16 @@ MAIN_SCRIPT="$SCRIPT_DIR/main.sh"
 # Versi minimum
 BASH_MIN_MAJOR=4
 FZF_MIN_VERSION="0.20.0"   # versi terlama yang sudah dites dengan TUI main.sh
+
+# Script yang di-rename / dihapus dari toolkit (path relatif terhadap workdir).
+# Salinan lama di INSTALL_DIR dihapus HANYA jika path-nya terdaftar di sini dan
+# tidak ada lagi di source; file lain di INSTALL_DIR (mis. script custom
+# operator) tidak pernah dihapus. Entry scripts.env yang menunjuk path ini
+# dilaporkan (file tidak diubah).
+declare -A RENAMED_SCRIPTS=(
+    [network/get-float-ip-info.sh]="network/get-ip-info.sh"
+)
+REMOVED_SCRIPTS=()
 
 SKIP_CHECKS=0
 CHECKED=0
@@ -259,6 +271,82 @@ report_redundant_env() {
     return 0
 }
 
+# Hapus salinan lama script yang terdaftar di RENAMED_SCRIPTS / REMOVED_SCRIPTS
+# (cp -R tidak menghapus file lama; file lama ber-@name akan tetap muncul di TUI).
+remove_obsolete_scripts() {
+    local old new
+
+    for old in "${!RENAMED_SCRIPTS[@]}" "${REMOVED_SCRIPTS[@]}"; do
+        [[ -e "$SCRIPT_DIR/$old" ]] && continue        # masih dikirim oleh source
+        [[ -f "$INSTALL_DIR/$old" ]] || continue
+        rm -f -- "$INSTALL_DIR/$old"
+        new="${RENAMED_SCRIPTS[$old]:-}"
+        if [[ -n "$new" ]]; then
+            info "Script lama dihapus: $INSTALL_DIR/$old (di-rename menjadi $new)"
+        else
+            info "Script lama dihapus: $INSTALL_DIR/$old (tidak lagi ada di toolkit)"
+        fi
+    done
+
+    return 0
+}
+
+# Laporkan entry scripts.env (rename atau !hide) yang menunjuk path di
+# RENAMED_SCRIPTS / REMOVED_SCRIPTS. File TIDAK diubah.
+report_renamed_env() {
+    local env_file="$1"
+    local -A obsolete=()
+    local old line p abs hide new
+    local found=()
+
+    for old in "${!RENAMED_SCRIPTS[@]}" "${REMOVED_SCRIPTS[@]}"; do
+        obsolete["$(realpath -m -s -- "$INSTALL_DIR/$old")"]="$old"
+    done
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        line="${line%%[[:space:]]#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        [[ -z "$line" || "$line" == \#* ]] && continue
+
+        hide=0
+        if [[ "$line" == !* ]]; then
+            hide=1
+            p="${line#!}"
+        elif [[ "$line" == *,* ]]; then
+            p="${line##*,}"
+        else
+            continue
+        fi
+        p="${p#"${p%%[![:space:]]*}"}"
+        [[ "$p" != /* ]] && p="$INSTALL_DIR/$p"
+        abs="$(realpath -m -s -- "$p")"
+
+        [[ -n "${obsolete[$abs]+x}" ]] || continue
+        old="${obsolete[$abs]}"
+        new="${RENAMED_SCRIPTS[$old]:-}"
+        if [[ -z "$new" ]]; then
+            found+=("$line   → script sudah dihapus dari toolkit; entry bisa dihapus")
+        elif (( hide )); then
+            found+=("$line   → ganti menjadi: !$new")
+        else
+            found+=("$line   → ganti menjadi: ${line%,*},$new")
+        fi
+    done < "$env_file"
+
+    if (( ${#found[@]} > 0 )); then
+        echo
+        warn "Entry berikut di scripts.env menunjuk path script lama (perlu diperbarui manual):"
+        printf '     %s\n' "${found[@]}"
+        info "File tidak diubah oleh installer."
+        echo
+    fi
+
+    return 0
+}
+
 # ============================================================
 # Parse arguments
 # ============================================================
@@ -417,6 +505,8 @@ else
 
 fi
 
+remove_obsolete_scripts
+
 # Make shell scripts executable
 for dir in "${CATEGORY_DIRS[@]}"; do
     [[ -d "$INSTALL_DIR/$dir" ]] || continue
@@ -455,6 +545,7 @@ if [[ -f "$INSTALL_DIR/scripts.env" ]]; then
     info "Existing scripts.env detected (override lokal), tidak diubah."
 
     report_redundant_env "$INSTALL_DIR/scripts.env"
+    report_renamed_env "$INSTALL_DIR/scripts.env"
 
 else
 
