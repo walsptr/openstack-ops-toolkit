@@ -1,3 +1,4 @@
 scripts.env
 log/
 adminrc
+scripts.env.bak-*
