@@ -1,27 +1,58 @@
 Cluster name: tripleo_cluster
+Status of pacemakerd: 'Pacemaker is running' (last updated 2026-11-03 10:32:18 +07:00)
 Cluster Summary:
-  * Stack: corosync (Pacemaker is running)
-  * Current DC: overcloud-controller-1 (version 2.1.5-9.el9_2.4-a3f44794f94) - partition with quorum
-  * Last updated: Mon Nov  2 10:00:00 2026 on overcloud-controller-0
-  * Last change:  Mon Nov  2 09:00:00 2026 by root via cibadmin on overcloud-controller-0
-  * 18 nodes configured
-  * 72 resource instances configured
+  * Stack: corosync
+  * Current DC: overcloud-controller-0 (version 2.1.5-9.el9_2.4-a3f44794f94) - partition with quorum
+  * Last updated: Tue Nov  3 10:32:18 2026
+  * Last change:  Mon Nov  2 23:41:42 2026 by root via cibadmin on overcloud-controller-2
+  * 12 nodes configured
+  * 54 resource instances configured
 
 Node List:
   * Online: [ overcloud-controller-0 overcloud-controller-1 overcloud-controller-2 ]
   * RemoteOnline: [ overcloud-computeiha-0 overcloud-computeiha-1 overcloud-computeiha-2 ]
-  * GuestOnline: [ galera-bundle-0 galera-bundle-1 galera-bundle-2 rabbitmq-bundle-0 rabbitmq-bundle-1 rabbitmq-bundle-2 redis-bundle-0 redis-bundle-1 redis-bundle-2 ]
+  * GuestOnline: [ galera-bundle-0 galera-bundle-1 galera-bundle-2 rabbitmq-bundle-0 rabbitmq-bundle-1 rabbitmq-bundle-2 ]
 
 Full List of Resources:
-  * overcloud-computeiha-0	(ocf:pacemaker:remote):	 Started overcloud-controller-0
-  * overcloud-computeiha-1	(ocf:pacemaker:remote):	 Started overcloud-controller-1
-  * overcloud-computeiha-2	(ocf:pacemaker:remote):	 Started overcloud-controller-2
-  * Container bundle set: galera-bundle [cluster.common.tag/rhosp17-openstack-mariadb:pcmklatest]:
-    * galera-bundle-0	(ocf:heartbeat:galera):	 Promoted overcloud-controller-0
-    * galera-bundle-1	(ocf:heartbeat:galera):	 Promoted overcloud-controller-1
-    * galera-bundle-2	(ocf:heartbeat:galera):	 Promoted overcloud-controller-2
-  * stonith-fence_ipmilan-controller-0	(stonith:fence_ipmilan):	 Started overcloud-controller-1
-  * nova-evacuate	(ocf:openstack:NovaEvacuate):	 Started overcloud-controller-2
+  * overcloud-computeiha-0  (ocf:pacemaker:remote):  Started overcloud-controller-0
+  * overcloud-computeiha-1  (ocf:pacemaker:remote):  Started overcloud-controller-1
+  * overcloud-computeiha-2  (ocf:pacemaker:remote):  Started overcloud-controller-2
+  * ip-192.168.24.110   (ocf:heartbeat:IPaddr2):         Started overcloud-controller-0
+  * ip-10.0.0.50      (ocf:heartbeat:IPaddr2):         Started overcloud-controller-0
+  * ip-172.17.0.101   (ocf:heartbeat:IPaddr2):         Started overcloud-controller-1
+  * ip-172.17.0.110   (ocf:heartbeat:IPaddr2):         Started overcloud-controller-0
+  * ip-172.18.0.10        (ocf:heartbeat:IPaddr2):         Started overcloud-controller-1
+  * ip-172.19.0.10    (ocf:heartbeat:IPaddr2):         Started overcloud-controller-0
+  * Container bundle set: haproxy-bundle [cluster.common.tag/haproxy:pcmklatest]:
+    * haproxy-bundle-podman-0   (ocf:heartbeat:podman):  Started overcloud-controller-0
+    * haproxy-bundle-podman-1   (ocf:heartbeat:podman):  Started overcloud-controller-1
+    * haproxy-bundle-podman-2   (ocf:heartbeat:podman):  Started overcloud-controller-2
+  * Container bundle set: galera-bundle [cluster.common.tag/mariadb:pcmklatest]:
+    * galera-bundle-0   (ocf:heartbeat:galera):  Promoted overcloud-controller-2
+    * galera-bundle-1   (ocf:heartbeat:galera):  Promoted overcloud-controller-0
+    * galera-bundle-2   (ocf:heartbeat:galera):  Promoted overcloud-controller-1
+  * Container bundle set: rabbitmq-bundle [cluster.common.tag/rabbitmq:pcmklatest]:
+    * rabbitmq-bundle-0 (ocf:heartbeat:rabbitmq-cluster):        Started overcloud-controller-2
+    * rabbitmq-bundle-1 (ocf:heartbeat:rabbitmq-cluster):        Started overcloud-controller-0
+    * rabbitmq-bundle-2 (ocf:heartbeat:rabbitmq-cluster):        Started overcloud-controller-1
+  * ip-172.17.0.102   (ocf:heartbeat:IPaddr2):         Started overcloud-controller-1
+  * stonith-fence_compute-fence-nova    (stonith:fence_compute):         Started overcloud-controller-2
+  * Clone Set: compute-unfence-trigger-clone [compute-unfence-trigger]:
+    * Started: [ overcloud-computeiha-0 overcloud-computeiha-1 overcloud-computeiha-2 ]
+    * Stopped: [ overcloud-controller-0 overcloud-controller-1 overcloud-controller-2 ]
+  * nova-evacuate       (ocf:openstack:NovaEvacuate):    Started overcloud-controller-2
+  * Container bundle: openstack-cinder-backup [cluster.common.tag/cinder-backup:pcmklatest]:
+    * openstack-cinder-backup-podman-0  (ocf:heartbeat:podman):  Started overcloud-controller-0
+  * Container bundle: openstack-cinder-volume [cluster.common.tag/cinder-volume:pcmklatest]:
+    * openstack-cinder-volume-podman-0  (ocf:heartbeat:podman):  Started overcloud-controller-1
+  * Container bundle: openstack-manila-share [cluster.common.tag/manila-share:pcmklatest]:
+    * openstack-manila-share-podman-0   (ocf:heartbeat:podman):  Started overcloud-controller-0
+  * stonith-fence_ipmilan-52540014e77c  (stonith:fence_ipmilan):         Started overcloud-controller-1
+  * stonith-fence_ipmilan-52540014d9f4  (stonith:fence_ipmilan):         Started overcloud-controller-2
+  * stonith-fence_ipmilan-52540014e800  (stonith:fence_ipmilan):         Started overcloud-controller-2
+  * stonith-fence_ipmilan-525400144c4f  (stonith:fence_ipmilan):         Started overcloud-controller-2
+  * stonith-fence_ipmilan-525400144ea3  (stonith:fence_ipmilan):         Started overcloud-controller-1
+  * stonith-fence_ipmilan-525400144f05  (stonith:fence_ipmilan):         Started overcloud-controller-2
 
 Daemon Status:
   corosync: active/enabled
