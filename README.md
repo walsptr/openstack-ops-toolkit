@@ -411,8 +411,9 @@ bar is not (only upload start, end and duration). `RESULT` lines: `action=upload
 
 ### Collect Public Floating IPs (`network/collect-public-fip.sh`)
 
-Read-only. Collects **all** floating IPs allocated from the chosen public (external) networks — from
-every subnet of the network — and writes one CSV file per network. Built for hundreds to thousands of
+Read-only. Collects the floating IPs allocated from the chosen public (external) networks — from
+every subnet of the network, all statuses by default or only `ACTIVE` / `DOWN` with `--status` — and
+writes one CSV file per network. Built for hundreds to thousands of
 floating IPs: data is fetched in bulk and joined with `jq`, never one CLI call per floating IP (except
 the parallel `cli` method). Requires an admin role and `jq`; `curl` is optional.
 
@@ -423,12 +424,15 @@ network/collect-public-fip.sh
 # Directly / from cron (no terminal: --network is required)
 network/collect-public-fip.sh --network public --output-dir /var/tmp/fip
 network/collect-public-fip.sh --network public --network PUB-01 --method cli --parallel 16
+network/collect-public-fip.sh --network public --status down
 ```
 
 Cron example (load the RC file first; output and log paths must be writable by the cron user):
 
 ```cron
 15 2 * * * . /root/adminrc && /opt/openstack-ops-toolkit/network/collect-public-fip.sh --network public --output-dir /var/tmp/fip
+# Daily report of DOWN floating IPs only (fip-public-down-<timestamp>.csv)
+30 2 * * * . /root/adminrc && /opt/openstack-ops-toolkit/network/collect-public-fip.sh --network public --status down --output-dir /var/tmp/fip
 ```
 
 | Option | Meaning |
@@ -438,6 +442,7 @@ Cron example (load the RC file first; output and log paths must be writable by t
 | `--output-dir PATH` | Output directory (default `/tmp`; must already exist) |
 | `--method M` | `auto` (default), `api`, or `cli` (see below) |
 | `--parallel N` | Parallel processes for the `cli` method (default 8, 1–64) |
+| `--status S` | `all` (default: every status, including `ERROR` and unknown ones), `active` (only `ACTIVE`), or `down` (only `DOWN`); case-insensitive. Without it, the picker mode asks after the networks are chosen (Enter = `all`); with `--network` and no `--status`, `all` is used without asking (same as before, also from cron). An invalid value is an error listing the accepted values |
 
 **Network selection.** `network list --external --long` is filtered by `--pattern`; internal networks
 never appear, even if their name matches. The picker (fzf multi-select with `TAB`, or a numbered menu
@@ -452,6 +457,13 @@ matches, all external networks are listed and the script exits with 1.
 | `api` | `GET /v2.0/floatingips?floating_network_id=<id>` with `curl`, following `floatingips_links` (`rel=next`). Token from `token issue`, endpoint from `catalog show network` for `OS_REGION_NAME` and `OS_INTERFACE` (default `public`). The token is passed to curl as a config on stdin (`-K -`), never as an argument or file, and never logged. `OS_CACERT`, `OS_CERT`/`OS_KEY`, `OS_INSECURE` are honoured |
 | `cli` | `floating ip list --network <id>` for the IDs, then `floating ip show -f json` per ID in parallel (`xargs -P`), with progress |
 
+**Status filter.** The final filter is the same `jq` step for every method, so `auto`, `api`, and `cli`
+give identical rows. As an optimization `floating ip list` also gets `--status ACTIVE|DOWN` (OSC 7.1.2
+supports it), so `cli` only runs `floating ip show` for floating IPs that pass the filter. The `api`
+method fetches all floating IPs of the network (no extra cost), so the summary also shows the total
+before the filter per status; after a server-side filter (`list`, `cli`) it shows "tidak diketahui".
+Instance ID/name rules do not depend on the filter (a `DOWN` floating IP still shows its instance).
+
 If the region does not have the `fip-port-details` extension, port owners are fetched in bulk
 (`GET /v2.0/ports?id=...` in batches of 50, or parallel `port show` for `cli`).
 
@@ -463,21 +475,26 @@ Deleted instances / orphan ports → `(not found)`. Instance ID and name are fil
 IP status (a `DOWN` floating IP still shows its instance); routers, load balancers, and unassociated
 floating IPs leave both columns empty.
 
-**CSV.** `<output-dir>/fip-<network-name>-<YYYYmmdd-HHMMSS>.csv` (name sanitized), created with
-permission `600` and never overwritten. Rows are produced with `jq @csv` (commas and quotes escaped),
+**CSV.** `<output-dir>/fip-<network-name>-<YYYYmmdd-HHMMSS>.csv` for `--status all`, and
+`<output-dir>/fip-<network-name>-<active|down>-<YYYYmmdd-HHMMSS>.csv` otherwise (name sanitized), created
+with permission `600` and never overwritten. When nothing matches the filter the CSV contains only the
+header (and the summary says so). Rows are produced with `jq @csv` (commas and quotes escaped),
 sorted by IP address numerically; `Created At` / `Updated At` are the API values (ISO 8601).
 
 ```
 Floating ID,Floating IP Address,Project Name,Status,Instance ID,Instance Name,Created At,Updated At
 ```
 
-**Summary** per network: region, method, number of floating IPs per status, associated to an instance,
-to a non-instance (router/LB/...), unassociated, instances `(not found)`, duration, and CSV path. Exit
+**Summary** per network: region, method, status filter (with `active`/`down`: total before the filter
+per status when known), number of floating IPs per status (with `all`: `ERROR`/other statuses counted
+separately), associated to an instance, to a non-instance (router/LB/...), unassociated, instances
+`(not found)`, duration, CSV path, and the number of floating IPs written to the CSV. Exit
 code 1 when any network failed (incomplete data still produces a CSV, marked `FAILED` in the log).
 
 Audit: pattern, chosen networks, method and fallback reason, API pages and counts, lookups, and one
-`RESULT action=collect-public-fip` per network (`resource=<network_id>`, `name`, `method`, `count`,
-`file`, `duration`, `msg`). Neither the token nor CSV contents are logged.
+`RESULT action=collect-public-fip` per network (`resource=<network_id>`, `name`, `method`, `count` =
+rows written after the filter, `file`, `duration`, `msg`, `status_filter`, `count_before_filter` or `-`).
+`status_filter` is also in the `INPUT` line (and a `DECISION` line when chosen at the prompt). Neither the token nor CSV contents are logged.
 
 Environment: `OSOPS_CURL`, `OSOPS_FZF` (command overrides), `OSOPS_COMPUTE_API_VERSION` (default
 `2.1`), `OSOPS_FIP_PAGE_LIMIT` (page size for the API, default none).

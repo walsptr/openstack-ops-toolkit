@@ -15,6 +15,7 @@ usage() {
     cat <<'EOF'
 Usage: collect-public-fip.sh [--network NAMA|ID]... [--pattern TEKS] [--output-dir PATH]
                              [--method auto|api|cli] [--parallel N]
+                             [--status all|active|down]
 
 Kumpulkan SEMUA floating IP yang dialokasikan dari network publik (external)
 pilihan, dari semua subnet di network tersebut, lalu tulis ke CSV (satu file
@@ -31,12 +32,19 @@ Opsi:
                        api : request langsung ke Neutron API dengan curl
                        cli : "floating ip show" per floating IP, paralel
   --parallel N       Jumlah proses paralel untuk metode cli (default 8, 1-64)
+  --status S         Status floating IP yang dikumpulkan (case-insensitive):
+                       all (default): semua status, termasuk ERROR/lainnya
+                       active       : hanya ACTIVE
+                       down         : hanya DOWN
   -h, --help         Tampilkan help
 
 Tanpa --network, network dipilih interaktif (fzf multi-select, fallback menu
-bernomor). Tanpa terminal (mis. cron), --network wajib.
+bernomor), lalu status ditanyakan jika --status tidak diberikan. Tanpa
+terminal (mis. cron), --network wajib. Dengan --network tanpa --status: all.
 
-File: <output-dir>/fip-<nama-network>-<YYYYmmdd-HHMMSS>.csv (permission 600)
+File: <output-dir>/fip-<nama-network>-<YYYYmmdd-HHMMSS>.csv          (all)
+      <output-dir>/fip-<nama-network>-<status>-<YYYYmmdd-HHMMSS>.csv (active/down)
+      (permission 600; tanpa hasil = hanya header)
 Kolom: Floating ID,Floating IP Address,Project Name,Status,Instance ID,
        Instance Name,Created At,Updated At
 
@@ -80,6 +88,8 @@ PATTERN="pub"
 OUTPUT_DIR="/tmp"
 METHOD="auto"
 PARALLEL=8
+STATUS_FILTER="all"   # all | active | down
+STATUS_GIVEN=0        # 1 = --status diberikan (tidak ditanyakan)
 
 # Jumlah device_id unik maksimum yang di-resolve dengan "server show" per ID;
 # di atas ini satu "server list --all-projects"
@@ -118,6 +128,7 @@ NET_METHOD=""
 NET_NOTES=()
 NET_FAILED=0
 NET_FAIL_MSG=""
+NET_PREFILTER=""      # status sebelum filter ("" = tidak diketahui: filter sisi server)
 
 ALL_RESULTS=()
 ANY_FAILED=0
@@ -207,6 +218,13 @@ os_compute() {
 # Setup: argumen, dependency, region
 # ============================================================
 
+valid_status() {
+    case "$1" in
+        all|active|down) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 need_value() {
     [[ -n "${2:-}" ]] || die "$1 membutuhkan nilai."
 }
@@ -219,6 +237,7 @@ parse_args() {
             --output-dir) need_value "$1" "${2:-}"; OUTPUT_DIR="$2"; shift 2 ;;
             --method)     need_value "$1" "${2:-}"; METHOD="${2,,}"; shift 2 ;;
             --parallel)   need_value "$1" "${2:-}"; PARALLEL="$2"; shift 2 ;;
+            --status)     need_value "$1" "${2:-}"; STATUS_FILTER="${2,,}"; STATUS_GIVEN=1; shift 2 ;;
             *)            die "Opsi tidak dikenal: $1 (lihat --help)" ;;
         esac
     done
@@ -227,6 +246,8 @@ parse_args() {
         auto|api|cli) ;;
         *) die "--method harus auto, api, atau cli (dapat: $METHOD)." ;;
     esac
+    valid_status "$STATUS_FILTER" || \
+        die "--status tidak valid: $STATUS_FILTER (nilai yang diterima: all, active, down; case-insensitive)."
     if [[ ! "$PARALLEL" =~ ^[0-9]+$ ]] || (( PARALLEL < 1 || PARALLEL > 64 )); then
         die "--parallel harus angka 1-64 (dapat: $PARALLEL)."
     fi
@@ -402,11 +423,39 @@ select_networks() {
     return 0
 }
 
+# Mode interaktif (picker) tanpa --status: tanyakan status yang dikumpulkan
+choose_status() {
+    local answer tries=0
+    echo
+    echo "${C_BOLD}Status floating IP yang dikumpulkan:${C_RESET}"
+    echo "  1. all     semua status (termasuk ERROR/lainnya)"
+    echo "  2. active  hanya ACTIVE"
+    echo "  3. down    hanya DOWN"
+    while true; do
+        tries=$(( tries + 1 ))
+        (( tries <= 5 )) || die "Status tidak valid (nilai yang diterima: all, active, down)."
+        ask answer "Pilih status [1-3 atau all/active/down; Enter = all]: "
+        answer="$(trim "${answer,,}")"
+        case "$answer" in
+            ""|1) answer=all ;;
+            2)    answer=active ;;
+            3)    answer=down ;;
+        esac
+        if valid_status "$answer"; then
+            STATUS_FILTER="$answer"
+            break
+        fi
+        echo "${C_YELLOW}⚠️  Pilihan tidak valid: $answer (nilai yang diterima: all, active, down)${C_RESET}"
+    done
+    log_event DECISION "status_filter=$STATUS_FILTER"
+    return 0
+}
+
 choose_networks() {
     local matched count
 
     log_event INPUT "pattern=$PATTERN" "networks_arg=${NET_ARGS[*]:-}" "method=$METHOD" \
-        "parallel=$PARALLEL" "output_dir=$OUTPUT_DIR"
+        "parallel=$PARALLEL" "output_dir=$OUTPUT_DIR" "status_filter=$STATUS_FILTER"
 
     if (( ${#NET_ARGS[@]} > 0 )); then
         resolve_network_args
@@ -426,6 +475,7 @@ choose_networks() {
         fi
         has_tty || die "Tidak ada terminal untuk memilih network; gunakan --network (mis. dari cron)."
         select_networks "$matched"
+        (( ${#SEL_IDS[@]} > 0 && ! STATUS_GIVEN )) && choose_status
     fi
 
     if (( ${#SEL_IDS[@]} == 0 )); then
@@ -480,6 +530,8 @@ list_has_all_fields() {
 fetch_list() {
     local net="$1" out="$2" errf="$2.err"
     shift 2
+    # Filter sisi server (optimasi; filter jq di fetch_fips tetap penentu akhir)
+    [[ "$STATUS_FILTER" != "all" ]] && set -- --status "${STATUS_FILTER^^}" "$@"
     if ! os_cli floating ip list --network "$net" "$@" -f json > "$out" 2>"$errf"; then
         NET_FAIL_MSG="floating ip list gagal: $(last_error_line "$errf")"
         return 1
@@ -576,6 +628,7 @@ fetch_cli() {
 # fetch_fips NET_ID OUT — pilih metode, hasil dinormalisasi di OUT
 fetch_fips() {
     local net="$1" out="$2" raw="$WORK_DIR/raw-$1.json" list="$WORK_DIR/list-$1.json"
+    local server_filtered=0
 
     case "$METHOD" in
         api)
@@ -586,12 +639,14 @@ fetch_fips() {
             fetch_list "$net" "$list" || return 1
             fetch_cli "$net" "$list" "$raw"
             NET_METHOD="cli"
+            server_filtered=1
             ;;
         auto)
             fetch_list "$net" "$list" --long || return 1
             if list_has_all_fields "$list"; then
                 cp "$list" "$raw"
                 NET_METHOD="list"
+                server_filtered=1
                 log_event METHOD "network_id=$net" method=list "reason=floating ip list memuat semua field"
             elif fetch_api "$net" "$raw"; then
                 NET_METHOD="api"
@@ -603,14 +658,24 @@ fetch_fips() {
                 warn "Metode api tidak bisa dipakai ($API_REASON); fallback ke cli."
                 log_event METHOD "network_id=$net" method=cli "reason=fallback api: $API_REASON"
                 fetch_cli "$net" "$list" "$raw"
+                server_filtered=1
             fi
             ;;
     esac
 
-    jq "$JQ_NORM"' [ .[] | norm ]' "$raw" > "$out" 2>/dev/null || {
+    jq "$JQ_NORM"' [ .[] | norm ]' "$raw" > "$out.all" 2>/dev/null || {
         NET_FAIL_MSG="data floating IP tidak bisa diparse"
         return 1
     }
+
+    # Filter status: tahap yang sama untuk semua metode (penentu akhir)
+    jq --arg s "$STATUS_FILTER" '[ .[] | select($s == "all" or .status == ($s | ascii_upcase)) ]' \
+        "$out.all" > "$out"
+    NET_PREFILTER=""
+    if [[ "$STATUS_FILTER" == "all" ]] || (( ! server_filtered )); then
+        NET_PREFILTER="$(jq -r 'length as $n | [ group_by(.status)[] | "\(.[0].status // "-")=\(length)" ]
+                                | "\($n) (\(join("  ")))"' "$out.all")"
+    fi
     return 0
 }
 
@@ -788,7 +853,7 @@ CSV_HEADER="Floating ID,Floating IP Address,Project Name,Status,Instance ID,Inst
 
 # write_csv FIPS NET_ID NET_NAME — set CSV_FILE. Permission 600, tidak menimpa file.
 write_csv() {
-    local fips="$1" net="$2" name="$3" ts base inst="$WORK_DIR/instances.json"
+    local fips="$1" net="$2" name="$3" ts base sfx inst="$WORK_DIR/instances.json"
 
     [[ -f "$WORK_DIR/inst-net.json" ]] && inst="$WORK_DIR/inst-net.json"
     jq -r --slurpfile proj "$WORK_DIR/projects.json" --slurpfile inst "$inst" \
@@ -796,9 +861,11 @@ write_csv() {
 
     ts="$(date +%Y%m%d-%H%M%S)"
     base="$OUTPUT_DIR/fip-$(safe_name "$name")"
-    CSV_FILE="$base-$ts.csv"
+    sfx=""
+    [[ "$STATUS_FILTER" != "all" ]] && sfx="-$STATUS_FILTER"
+    CSV_FILE="$base$sfx-$ts.csv"
     if [[ -e "$CSV_FILE" ]]; then
-        CSV_FILE="$base-${net:0:8}-$ts.csv"
+        CSV_FILE="$base-${net:0:8}$sfx-$ts.csv"
     fi
 
     # umask 077 + noclobber: file baru dengan permission 600, file lama tidak ditimpa
@@ -828,22 +895,34 @@ print_summary() {
           ([ .[] | select(is_inst) ] | length),
           ([ .[] | select(.port_id != "" and (is_inst | not)) ] | length),
           ([ .[] | select(.port_id == "") ] | length),
-          ([ .[] | select(is_inst) | .device_id ] | unique | map(select($inst[0][.] == "(not found)")) | length)
+          ([ .[] | select(is_inst) | .device_id ] | unique | map(select($inst[0][.] == "(not found)")) | length),
+          ([ .[] | select(.status != "ACTIVE" and .status != "DOWN") ] | length)
         ] | map(tostring) | join("\u001f")' "$fips")"
-    IFS=$'\x1f' read -r S_TOTAL S_STATUS S_INST S_OTHER S_FREE S_NOTFOUND <<< "$stats"
+    IFS=$'\x1f' read -r S_TOTAL S_STATUS S_INST S_OTHER S_FREE S_NOTFOUND S_OTHERSTATUS <<< "$stats"
 
     echo
     echo "${C_BOLD}── $name ($net)${C_RESET}"
     printf '  %-27s : %s\n' "Region" "$REGION"
     printf '  %-27s : %s\n' "Metode" "$NET_METHOD"
+    printf '  %-27s : %s\n' "Filter status" "$STATUS_FILTER"
+    if [[ "$STATUS_FILTER" != "all" ]]; then
+        printf '  %-27s : %s\n' "Sebelum filter" "${NET_PREFILTER:-tidak diketahui (filter sisi server)}"
+    fi
     printf '  %-27s : %s\n' "Total floating IP" "$S_TOTAL"
     printf '  %-27s : %s\n' "Per status" "${S_STATUS:--}"
+    if [[ "$STATUS_FILTER" == "all" ]]; then
+        printf '  %-27s : %s\n' "Status ERROR/lainnya" "$S_OTHERSTATUS"
+    fi
     printf '  %-27s : %s\n' "Terasosiasi ke instance" "$S_INST"
     printf '  %-27s : %s\n' "Terasosiasi ke non-instance" "$S_OTHER (router/LB/dll.)"
     printf '  %-27s : %s\n' "Tidak terasosiasi" "$S_FREE"
     printf '  %-27s : %s\n' "Instance (not found)" "$S_NOTFOUND"
     printf '  %-27s : %ss\n' "Durasi" "$dur"
     printf '  %-27s : %s\n' "File CSV" "${CSV_FILE:--}"
+    printf '  %-27s : %s\n' "Ditulis ke CSV" "$S_TOTAL floating IP"
+    if [[ -n "$CSV_FILE" ]] && (( S_TOTAL == 0 )); then
+        printf '  %-27s : %s\n' "Catatan" "tidak ada floating IP dengan filter status '$STATUS_FILTER'; CSV hanya berisi header"
+    fi
     for note in "${NET_NOTES[@]}"; do
         printf '  %-27s : %s\n' "Catatan" "$note"
     done
@@ -859,9 +938,9 @@ print_summary() {
 # ============================================================
 
 process_network() {
-    local net="$1" name="$2" start=$SECONDS dur fips="$WORK_DIR/fips-$1.json" result msg
+    local net="$1" name="$2" start=$SECONDS dur fips="$WORK_DIR/fips-$1.json" result msg before
 
-    NET_METHOD="-" NET_NOTES=() NET_FAILED=0 NET_FAIL_MSG="" CSV_FILE=""
+    NET_METHOD="-" NET_NOTES=() NET_FAILED=0 NET_FAIL_MSG="" CSV_FILE="" NET_PREFILTER=""
     rm -f "$WORK_DIR/inst-net.json"
 
     echo
@@ -871,12 +950,13 @@ process_network() {
         dur=$(( SECONDS - start ))
         echo "  ${C_RED}❌ $NET_FAIL_MSG${C_RESET}"
         log_result "resource=$net" action=collect-public-fip result=FAILED "name=$name" \
-            "method=$NET_METHOD" count=0 file=- "duration=${dur}s" "msg=$NET_FAIL_MSG"
+            "method=$NET_METHOD" count=0 file=- "duration=${dur}s" "msg=$NET_FAIL_MSG" \
+            "status_filter=$STATUS_FILTER"
         ALL_RESULTS+=("$name|FAILED|0|-")
         ANY_FAILED=1
         return 0
     fi
-    echo "  Metode: $NET_METHOD — $(jq length "$fips") floating IP"
+    echo "  Metode: $NET_METHOD — $(jq length "$fips") floating IP (filter status: $STATUS_FILTER)"
 
     fill_port_details "$fips"
     resolve_projects
@@ -889,6 +969,7 @@ process_network() {
     dur=$(( SECONDS - start ))
     print_summary "$fips" "$net" "$name" "$dur"
 
+    before="${NET_PREFILTER%% *}"
     result=SUCCESS
     msg="ok"
     (( ${#NET_NOTES[@]} > 0 )) && msg="$(IFS=';'; echo "${NET_NOTES[*]}")"
@@ -898,7 +979,8 @@ process_network() {
         ANY_FAILED=1
     fi
     log_result "resource=$net" action=collect-public-fip "result=$result" "name=$name" \
-        "method=$NET_METHOD" "count=$S_TOTAL" "file=${CSV_FILE:--}" "duration=${dur}s" "msg=$msg"
+        "method=$NET_METHOD" "count=$S_TOTAL" "file=${CSV_FILE:--}" "duration=${dur}s" "msg=$msg" \
+        "status_filter=$STATUS_FILTER" "count_before_filter=${before:--}"
     ALL_RESULTS+=("$name|$result|$S_TOTAL|${CSV_FILE:--}")
     return 0
 }
@@ -933,11 +1015,12 @@ main() {
             IFS='|' read -r name res cnt file <<< "$r"
             printf '  %-8s %-24s %6s FIP  %s\n' "$res" "$name" "$cnt" "$file"
         done
+        echo "  Filter status: $STATUS_FILTER"
     fi
     echo
     echo "Log : ${LOG_FILE:-(logging nonaktif)}"
 
-    log_event SUMMARY "networks=${#SEL_IDS[@]}" "failed=$ANY_FAILED"
+    log_event SUMMARY "networks=${#SEL_IDS[@]}" "failed=$ANY_FAILED" "status_filter=$STATUS_FILTER"
     (( ANY_FAILED )) && exit 1
     return 0
 }

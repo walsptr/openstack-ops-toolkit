@@ -282,6 +282,7 @@ test_fzf_multi() {
     expect_no_match "fzf: pub-internal tidak muncul" "$(screen_text)" 'pub-internal'
     # Urutan (case-insensitive): pub ext/02, PUB-01, public, Public-Lab
     keys Down Tab Tab Enter
+    wait_for 'Pilih status' && keys Enter
     expect_eq "exit 0" "$(tmux_exit)" 0
     expect_eq "dua CSV" "$(csv_files | wc -l)" 2
     expect_true_file "CSV PUB-01" "$(csv_of PUB-01)"
@@ -309,6 +310,7 @@ test_menu() {
     answer 'Pilih network' 1 '9' || return 0
     wait_for 'Pilihan tidak valid: 9' || return 0
     answer 'Pilih network' 2 '3, 4,3' || return 0
+    wait_for 'Pilih status' && keys Enter
     expect_eq "exit 0" "$(tmux_exit)" 0
     expect_eq "dua CSV (duplikat diabaikan)" "$(csv_files | wc -l)" 2
     expect_true_file "CSV public" "$(csv_of public)"
@@ -317,6 +319,7 @@ test_menu() {
 
     FZF_CMD="/tidak/ada/fzf" run_tmux "" --output-dir "$WORK/out"
     answer 'Pilih network' 1 'all' || return 0
+    wait_for 'Pilih status' && keys Enter
     expect_eq "all: exit 0" "$(tmux_exit)" 0
     expect_match "all: nama network disanitasi" "$(csv_files)" 'fip-pub_ext_02-[0-9]{8}-[0-9]{6}\.csv'
 }
@@ -589,6 +592,169 @@ test_interrupt() {
     expect_eq "tanpa CSV" "$(csv_files)" ""
 }
 
+# Fixture default + ERROR (terasosiasi ke instance) + status tidak dikenal
+status_fixture() {
+    jq '. + [
+      {id: "f0000000-0000-4000-8000-000000000008", floating_ip_address: "10.0.2.1",
+       floating_network_id: "b0000000-0000-4000-8000-000000000001",
+       project_id: "a0000000000000000000000000000001", status: "ERROR",
+       port_id: "e0000000-0000-4000-8000-000000000008",
+       port_details: {device_id: "50000000-0000-4000-8000-000000000001", device_owner: "compute:nova"},
+       created_at: "2026-01-09T10:00:00Z", updated_at: "2026-01-09T10:00:00Z"},
+      {id: "f0000000-0000-4000-8000-000000000009", floating_ip_address: "10.0.2.2",
+       floating_network_id: "b0000000-0000-4000-8000-000000000001",
+       project_id: "a0000000000000000000000000000002", status: "PENDING_X",
+       port_id: null, port_details: null,
+       created_at: "2026-01-10T10:00:00Z", updated_at: "2026-01-10T10:00:00Z"} ]' \
+        "$HERE/fixtures/fips.json" > "$WORK/state/fips.json"
+}
+
+csv_statuses() {
+    tail -n +2 "$1" | grep -oE '"(ACTIVE|DOWN|ERROR|PENDING_X)"' | sort | uniq -c | awk '{printf "%s=%s ", $2, $1}'
+}
+
+test_status_args() {
+    begin "status_args"
+    run_direct -- --network public --status foo --output-dir "$WORK/out"
+    expect_eq "--status tidak valid exit 1" "$RC" 1
+    expect_match "pesan + daftar nilai" "$OUT" '--status tidak valid: foo \(nilai yang diterima: all, active, down'
+    expect_eq "tidak valid: tanpa CSV" "$(csv_files)" ""
+    expect_eq "tidak valid: tanpa panggilan CLI" "$(calls)" ""
+
+    run_direct -- --network public --status --output-dir "$WORK/out"
+    expect_eq "--status tanpa nilai exit 1" "$RC" 1
+
+    # Tanpa --status: perilaku lama (tanpa --status di CLI, nama file tanpa sufiks)
+    reset_state
+    run_direct -- --network public --method cli --output-dir "$WORK/out"
+    expect_eq "default: exit 0" "$RC" 0
+    expect_no_match "default: tanpa --status ke CLI" "$(calls)" '--status'
+    expect_match "default: nama file lama" "$(csv_files)" "/out/fip-public-[0-9]{8}-[0-9]{6}\.csv$"
+    expect_eq "default: isi CSV sama" "$(tail -n +2 "$(csv_of public)")" "$EXPECTED_PUBLIC"
+    expect_match "default: log INPUT status_filter=all" "$(log_text)" 'INPUT .*status_filter=all'
+    expect_match "default: log RESULT status_filter=all" "$(log_text)" 'action=collect-public-fip result=SUCCESS .*count=7 .*status_filter=all'
+
+    # ALL (case-insensitive) = all, termasuk ERROR dan status tidak dikenal
+    reset_state
+    status_fixture
+    run_direct -- --network public --status ALL --output-dir "$WORK/out"
+    expect_eq "ALL: exit 0" "$RC" 0
+    expect_match "ALL: nama file tanpa sufiks" "$(csv_files)" "/out/fip-public-[0-9]{8}-[0-9]{6}\.csv$"
+    expect_eq "ALL: semua status di CSV" "$(csv_statuses "$(csv_of public)")" '"ACTIVE"=5 "DOWN"=2 "ERROR"=1 "PENDING_X"=1 '
+    expect_match "ALL: ringkasan filter" "$OUT" 'Filter status +: all'
+    expect_match "ALL: ERROR/lainnya terpisah" "$OUT" 'Status ERROR/lainnya +: 2'
+    expect_match "ALL: jumlah ditulis" "$OUT" 'Ditulis ke CSV +: 9 floating IP'
+    expect_match "ALL: ERROR terasosiasi tetap instance" "$(grep '"10.0.2.1"' "$(csv_of public)")" '"ERROR","50000000-0000-4000-8000-000000000001","web-01"'
+}
+
+test_status_filter() {
+    local st up m api_rows cli_rows f
+    local -A want_rows=([active]=5 [down]=2 [all]=9)
+    for st in active down all; do
+        up="${st^^}"
+        begin "status_filter_$st"
+        status_fixture
+        run_direct -- --network public --method api --status "$st" --output-dir "$WORK/out"
+        expect_eq "api: exit 0" "$RC" 0
+        f="$(csv_files)"
+        if [[ "$st" == "all" ]]; then
+            expect_match "api: nama file" "$f" "/out/fip-public-[0-9]{8}-[0-9]{6}\.csv$"
+        else
+            expect_match "api: nama file dengan status" "$f" "/out/fip-public-$st-[0-9]{8}-[0-9]{6}\.csv$"
+            expect_eq "api: hanya $up" "$(tail -n +2 "$f" | grep -oE '"(ACTIVE|DOWN|ERROR|PENDING_X)"' | sort -u)" "\"$up\""
+            expect_match "api: total sebelum filter" "$OUT" 'Sebelum filter +: 9 \(ACTIVE=5  DOWN=2  ERROR=1  PENDING_X=1\)'
+            expect_no_match "api: tanpa baris ERROR/lainnya" "$OUT" 'Status ERROR/lainnya'
+        fi
+        expect_match "api: ringkasan filter" "$OUT" "Filter status +: $st"
+        expect_match "log RESULT status_filter" "$(log_text)" "action=collect-public-fip result=SUCCESS .*status_filter=$st count_before_filter=9"
+        api_rows="$(tail -n +2 "$f")"
+        expect_eq "api: jumlah baris" "$(wc -l <<< "$api_rows")" "${want_rows[$st]}"
+        expect_match "api: jumlah ditulis" "$OUT" "Ditulis ke CSV +: ${want_rows[$st]} floating IP"
+
+        reset_state
+        status_fixture
+        run_direct -- --network public --method cli --status "$st" --output-dir "$WORK/out"
+        expect_eq "cli: exit 0" "$RC" 0
+        cli_rows="$(tail -n +2 "$(csv_files)")"
+        expect_eq "cli == api" "$cli_rows" "$api_rows"
+        m="$(wc -l <<< "$cli_rows")"
+        expect_eq "cli: floating ip show hanya untuk yang lolos filter" "$(calls | grep -c '^floating ip show' || true)" "$m"
+        if [[ "$st" != "all" ]]; then
+            expect_match "cli: filter sisi server" "$(calls)" "floating ip list --network $N_PUB --status $up -f json"
+            expect_match "cli: sebelum filter tidak diketahui" "$OUT" 'Sebelum filter +: tidak diketahui \(filter sisi server\)'
+            expect_match "cli: log count_before_filter=-" "$(log_text)" "status_filter=$st count_before_filter=-"
+        fi
+
+        # auto: filter sisi server di list, data dari api, hasil sama
+        reset_state
+        status_fixture
+        run_direct -- --network public --status "$st" --output-dir "$WORK/out"
+        expect_eq "auto == api" "$(tail -n +2 "$(csv_files)")" "$api_rows"
+    done
+
+}
+
+test_status_down_instance() {
+    begin "status_down_instance"
+    run_direct -- --network public --method api --status down --output-dir "$WORK/out"
+    expect_eq "exit 0" "$RC" 0
+    expect_eq "2 baris DOWN" "$(tail -n +2 "$(csv_of public)" | wc -l)" 2
+    expect_match "DOWN terasosiasi → instance tetap" "$(grep '"10.0.1.20"' "$(csv_of public)")" '"DOWN","50000000-0000-4000-8000-000000000003","app-03"'
+    expect_match "DOWN tanpa port → kosong" "$(grep '"9.255.255.255"' "$(csv_of public)")" '"DOWN","",""'
+    expect_eq "server show hanya untuk instance yang lolos filter" "$(calls | grep -c 'server show' || true)" 1
+}
+
+test_status_empty() {
+    local m
+    for m in api cli; do
+        begin "status_empty_$m"
+        # PUB-01 hanya punya floating IP DOWN
+        run_direct -- --network PUB-01 --method "$m" --status active --output-dir "$WORK/out"
+        expect_eq "exit 0" "$RC" 0
+        expect_match "nama file" "$(csv_files)" "/out/fip-PUB-01-active-[0-9]{8}-[0-9]{6}\.csv$"
+        expect_eq "CSV hanya header" "$(cat "$(csv_files)")" "$HEADER"
+        expect_match "ringkasan: 0 ditulis" "$OUT" 'Ditulis ke CSV +: 0 floating IP'
+        expect_match "ringkasan: hasil kosong" "$OUT" "tidak ada floating IP dengan filter status 'active'; CSV hanya berisi header"
+        expect_match "log count=0" "$(log_text)" 'result=SUCCESS name=PUB-01 .*count=0 .*status_filter=active'
+    done
+}
+
+test_status_prompt() {
+    begin "status_prompt"
+    # Picker tanpa --status → prompt muncul; jawaban tidak valid diulang
+    FZF_CMD="/tidak/ada/fzf" run_tmux "" --output-dir "$WORK/out"
+    answer 'Pilih network' 1 '3' || return 0
+    answer 'Pilih status' 1 'xyz' || return 0
+    wait_for 'Pilihan tidak valid: xyz' || return 0
+    # Spasi di depan: tmux membaca "DOWN" saja sebagai tombol panah
+    answer 'Pilih status' 2 ' DOWN' || return 0
+    expect_eq "exit 0" "$(tmux_exit)" 0
+    expect_match "file down" "$(csv_files)" "/out/fip-public-down-[0-9]{8}-[0-9]{6}\.csv$"
+    expect_match "log DECISION status" "$(log_text)" 'DECISION status_filter=down'
+
+    reset_state
+    FZF_CMD="/tidak/ada/fzf" run_tmux "" --output-dir "$WORK/out"
+    answer 'Pilih network' 1 '3' || return 0
+    answer 'Pilih status' 1 '2' || return 0
+    expect_eq "nomor 2: exit 0" "$(tmux_exit)" 0
+    expect_match "nomor 2 = active" "$(csv_files)" "/out/fip-public-active-"
+
+    # Picker dengan --status → tanpa prompt
+    reset_state
+    FZF_CMD="/tidak/ada/fzf" run_tmux "" --status down --output-dir "$WORK/out"
+    answer 'Pilih network' 1 '3' || return 0
+    expect_eq "--status: exit 0" "$(tmux_exit)" 0
+    expect_no_match "--status: prompt tidak muncul" "$(screen_text)" 'Pilih status'
+    expect_match "--status: file down" "$(csv_files)" "/out/fip-public-down-"
+
+    # --network di terminal tanpa --status → tanpa prompt, all
+    reset_state
+    run_tmux "" --network public --output-dir "$WORK/out"
+    expect_eq "--network: exit 0" "$(tmux_exit)" 0
+    expect_no_match "--network: prompt tidak muncul" "$(screen_text)" 'Pilih status'
+    expect_match "--network: file all" "$(csv_files)" "/out/fip-public-[0-9]{8}-[0-9]{6}\.csv$"
+}
+
 test_readonly() {
     begin "readonly"
     # calls.log semua tes sebelumnya (diarsipkan oleh reset_state)
@@ -606,7 +772,8 @@ test_readonly() {
 # ============================================================
 
 for t in cli pattern fzf_multi menu network_arg auto fallback pagination token instance_rules \
-         cli_method nodetails server_list lookup_fail interrupt readonly; do
+         cli_method nodetails server_list lookup_fail interrupt \
+         status_args status_filter status_down_instance status_empty status_prompt readonly; do
     want "$t" && "test_$t"
 done
 

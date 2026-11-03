@@ -68,8 +68,18 @@ case "$*" in
         net="$5"
         long=0
         [[ " $* " == *" --long "* ]] && long=1
-        fips | jq --arg n "$net" --argjson long "$long" --argjson full "$(scen list_full 0)" '
-            [ .[] | select(.floating_network_id == $n)
+        # --status ACTIVE|DOWN (filter sisi server, OSC 7.1.2: hanya dua nilai ini)
+        status=""
+        args=("$@")
+        for (( i = 0; i < ${#args[@]}; i++ )); do
+            [[ "${args[$i]}" == "--status" ]] && status="${args[$((i + 1))]}"
+        done
+        if [[ -n "$status" && "$status" != "ACTIVE" && "$status" != "DOWN" ]]; then
+            echo "openstack floating ip list: error: argument --status: invalid choice: '$status'" >&2
+            exit 2
+        fi
+        fips | jq --arg n "$net" --arg st "$status" --argjson long "$long" --argjson full "$(scen list_full 0)" '
+            [ .[] | select(.floating_network_id == $n) | select($st == "" or .status == $st)
               | { ID: .id, "Floating IP Address": .floating_ip_address, "Fixed IP Address": .fixed_ip_address,
                   Port: .port_id, "Floating Network": .floating_network_id, Project: .project_id }
                 + (if $long == 1 then { Router: .router_id, Status: .status, Description: "", Tags: [],
