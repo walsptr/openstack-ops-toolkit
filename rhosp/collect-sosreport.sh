@@ -35,7 +35,8 @@ Options:
   --node HOST            Node target (bisa diulang)
   --role ROLE            Semua node dalam role (bisa diulang)
   --include-undercloud   Ikut kumpulkan sosreport undercloud (dijalankan lokal)
-  --case-id ID           Tambahkan --case-id ID ke perintah sosreport
+  --case-id ID           Tambahkan --case-id ID ke perintah sosreport. Tanpa opsi
+                         ini, Case ID ditanyakan (kosong = tanpa --case-id)
   --dest DIR             Direktori tujuan di undercloud (default /tmp, harus sudah ada)
   --parallel N           Jumlah node yang dikumpulkan bersamaan (default 1)
   --timeout MENIT        Batas waktu sosreport per node (default 60)
@@ -86,6 +87,7 @@ NODE_ARGS=()
 ROLE_ARGS=()
 INCLUDE_UC=0
 CASE_ID=""
+CASE_ID_SET=0
 DEST="/tmp"
 PARALLEL=1
 TIMEOUT_MIN=60
@@ -382,9 +384,32 @@ check_environment() {
     [[ -d "$DEST" ]] || die "Direktori tujuan tidak ada: $DEST (buat dulu, script tidak membuatnya)."
     [[ -w "$DEST" ]] || die "Direktori tujuan tidak bisa ditulis: $DEST"
     DEST="$(realpath -- "$DEST")"
+    ask_case_id
     log_event INPUT "dest=$DEST" "parallel=$PARALLEL" "timeout_min=$TIMEOUT_MIN" \
         "case_id=${CASE_ID:--}" "keep_remote=$KEEP_REMOTE" "dry_run=$DRY_RUN" \
         "include_undercloud=$INCLUDE_UC"
+    return 0
+}
+
+valid_case_id() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]*$ ]]
+}
+
+# Case ID Red Hat (masuk ke nama arsip: sosreport-<host>-<case-id>-<tanggal>-<acak>.tar.xz)
+ask_case_id() {
+    local input
+
+    (( CASE_ID_SET )) && return 0
+    while true; do
+        ask input "📝 Case ID Red Hat (mis. 04123456; kosong = tanpa --case-id): "
+        input="$(trim "$input")"
+        if valid_case_id "$input"; then
+            CASE_ID="$input"
+            break
+        fi
+        echo "${C_RED}❌ Case ID hanya boleh huruf, angka, titik, minus, underscore.${C_RESET}"
+    done
+    log_event DECISION "case_id=${CASE_ID:--}" source=prompt
     return 0
 }
 
@@ -2154,7 +2179,7 @@ while (( $# > 0 )); do
         --node)               need_arg "$1" "${2:-}"; NODE_ARGS+=("$2"); shift 2 ;;
         --role)               need_arg "$1" "${2:-}"; ROLE_ARGS+=("$2"); shift 2 ;;
         --include-undercloud) INCLUDE_UC=1; shift ;;
-        --case-id)            need_arg "$1" "${2:-}"; CASE_ID="$2"; shift 2 ;;
+        --case-id)            need_arg "$1" "${2:-}"; CASE_ID="$2"; CASE_ID_SET=1; shift 2 ;;
         --dest)               need_arg "$1" "${2:-}"; DEST="$2"; shift 2 ;;
         --parallel)           need_arg "$1" "${2:-}"; PARALLEL="$2"; shift 2 ;;
         --timeout)            need_arg "$1" "${2:-}"; TIMEOUT_MIN="$2"; shift 2 ;;
@@ -2169,7 +2194,7 @@ while (( $# > 0 )); do
     esac
 done
 
-[[ "$CASE_ID" =~ ^[A-Za-z0-9._-]*$ ]] || die "--case-id hanya boleh huruf, angka, titik, minus, underscore."
+valid_case_id "$CASE_ID" || die "--case-id hanya boleh huruf, angka, titik, minus, underscore."
 if ! is_uint "$PARALLEL" || (( PARALLEL < 1 )); then
     die "--parallel harus bilangan bulat >= 1."
 fi

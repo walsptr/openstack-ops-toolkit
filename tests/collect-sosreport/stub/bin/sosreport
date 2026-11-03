@@ -2,7 +2,7 @@
 # Stub sosreport: format output sos 4.x (RHEL 9). Mode lewat env:
 #   SOS_MODE=normal|noparse|none|fail   SOS_SLEEP=<detik>
 #   SOS_NO_SHAFILE=1 (tanpa .sha256)    SOS_NO_HASHLINE=1 (tanpa baris sha256)
-#   SOS_NAME=<nama arsip tetap>
+#   SOS_NAME=<nama arsip tetap>  SOS_HOSTNAME=<hostname di nama arsip>
 printf 'sosreport\t%s\t%s\n' "${STUB_HOST:-local}" "$*" >> "${STUB_STATE:?}/calls.log"
 dir="${STUB_SOS_DIR:?}"
 case_id=""
@@ -25,7 +25,8 @@ if [[ "${SOS_MODE:-normal}" == "fail" ]]; then
     exit 1
 fi
 
-name="sosreport-${STUB_HOST:-undercloud}"
+# Nama seperti sos 4.x: sosreport-<hostname pendek>[-<case-id>]-<YYYY-MM-DD>-<7 acak>.tar.xz
+name="sosreport-${SOS_HOSTNAME:-${STUB_HOST:-undercloud}}"
 name="${name//./-}${case_id:+-$case_id}-$(date +%Y-%m-%d)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-7).tar.xz"
 [[ -n "${SOS_NAME:-}" ]] && name="$SOS_NAME"
 [[ "${SOS_MODE:-normal}" == "none" ]] && { echo " Finished running plugins"; exit 0; }

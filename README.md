@@ -676,7 +676,7 @@ start — `~/stackrc` works). Marked `@platform: rhosp`: on a host without `/etc
 shows it as `Collect sosreport (rhosp only)` and does not run it; the script checks again itself.
 
 ```bash
-# From the TUI: no arguments — nodes are picked in a picker (fzf multi-select or numbered menu)
+# From the TUI: no arguments — the Case ID is asked, nodes are picked in a picker (fzf multi-select or numbered menu)
 # with entries such as "[semua Controller]", "[semua ComputeInstanceHA]" and "Undercloud (lokal)".
 rhosp/collect-sosreport.sh
 
@@ -692,7 +692,7 @@ rhosp/collect-sosreport.sh --role Controller --dry-run
 | `--inventory PATH` | Inventory file (skips the search below) |
 | `--node HOST`, `--role ROLE` | Target nodes (repeatable, case-insensitive). Unknown names are skipped with a message |
 | `--include-undercloud` | Also collect from the undercloud (run locally) |
-| `--case-id ID` | Adds `--case-id ID` to the sosreport command |
+| `--case-id ID` | Red Hat case ID, added as `--case-id ID` to the sosreport command. Without this option the Case ID is asked at start (empty answer = no `--case-id`) |
 | `--dest DIR` | Destination directory on the undercloud (default `/tmp`; must already exist) |
 | `--parallel N` | Nodes collected at the same time (default 1, to keep load on cluster nodes low) |
 | `--timeout MIN` | sosreport time limit per node (default 60) |
@@ -758,8 +758,9 @@ recorded value is restored at the end), or `q` (quit). If fencing is already bac
 file is removed. A lock (`log/rhosp/collect-sosreport.lock`) prevents two runs from changing fencing
 at the same time; run it inside `tmux`/`screen`.
 
-**Results** — archive location is parsed from the sosreport output (fallback: the newest
-`/var/tmp/sosreport-*.tar.xz` newer than the node's pre-check time). On the node the archive and its
+**Results** — sosreport writes `/var/tmp/sosreport-<hostname>-<case-id>-<YYYY>-<MM>-<DD>-<random>.tar.xz`
+(owned by root) plus `<archive>.sha256`. The location is parsed from the sosreport output (fallback:
+the newest `/var/tmp/sosreport-*.tar.xz` newer than the node's pre-check time). On the node the archive and its
 `.sha256` are `chown`ed to the SSH user, copied with `scp` to `--dest` with permission `600` (a name
 that already exists is never overwritten: the copy gets a `-<run_id>` suffix), and the SHA-256 is
 verified (`FAILED (checksum mismatch)` keeps the file on the node). Afterwards one question offers to

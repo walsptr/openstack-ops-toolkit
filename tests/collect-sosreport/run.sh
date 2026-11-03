@@ -31,6 +31,10 @@ FAILED_TESTS=()
 C0=192.168.24.21 C1=192.168.24.22 C2=192.168.24.23
 P0=192.168.24.24 P1=192.168.24.25 P2=192.168.24.26
 ALL_IPS=("$C0" "$C1" "$C2" "$P0" "$P1" "$P2")
+declare -A HOSTNAME_OF=(
+    [$C0]=overcloud-controller-0 [$C1]=overcloud-controller-1 [$C2]=overcloud-controller-2
+    [$P0]=overcloud-computeiha-0 [$P1]=overcloud-computeiha-1 [$P2]=overcloud-computeiha-2
+)
 
 # Nilai palsu field sensitif di fixture inventory (tidak boleh bocor)
 SECRET_TOKEN="FAKE-os-auth-token-9d1e7c"
@@ -107,7 +111,7 @@ reset_state() {
     for ip in "${ALL_IPS[@]}"; do
         mkdir -p "$WORK/state/hosts/$ip/var_tmp"
         echo "Red Hat OpenStack Platform release 17.1.4 (Wallaby)" > "$WORK/state/hosts/$ip/rhosp-release"
-        : > "$WORK/state/hosts/$ip/env"
+        echo "SOS_HOSTNAME=${HOSTNAME_OF[$ip]}" > "$WORK/state/hosts/$ip/env"
         printf '%s %s\n' "$ip" "$HOSTKEY_PUB" >> "$WORK/home/.ssh/known_hosts"
     done
     echo true > "$WORK/state/cluster/stonith"
@@ -188,10 +192,18 @@ tmux_exit() {
 }
 
 # start "ENV" ARGS... — run_tmux + jawab prompt user bukan 'stack' (jika ada)
+# dan prompt Case ID (kosong, atau $CASE_ANSWER) jika --case-id tidak diberikan
 start() {
+    local a case_given=0
+    for a in "$@"; do
+        [[ "$a" == "--case-id" ]] && case_given=1
+    done
     run_tmux "$@"
     if [[ "$(id -un)" != "stack" ]]; then
         answer 'Tetap lanjut sebagai' 1 y || return 1
+    fi
+    if (( ! case_given )); then
+        answer 'Case ID Red Hat' 1 "${CASE_ANSWER:-}" || return 1
     fi
 }
 
@@ -332,6 +344,7 @@ test_release() {
     run_tmux "" --dry-run --include-undercloud
     answer 'Tetap lanjut di versi ini' 1 y || return 0
     [[ "$(id -un)" != stack ]] && { answer 'Tetap lanjut sebagai' 1 y || return 0; }
+    answer 'Case ID Red Hat' 1 "" || return 0
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
     expect_match "lanjut setelah konfirmasi" "$(log_text)" 'DECISION release_mismatch=continue'
@@ -489,8 +502,26 @@ test_case_id() {
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
     expect_true "perintah persis + --case-id" grep -qxF "ssh"$'\t'"$P0"$'\t'"yes"$'\t'"$SOS_EXACT --case-id 04123456" "$WORK/state/calls.log"
-    expect_match "case-id di nama arsip" "$(tsv 8 overcloud-computeiha-0)" 'sosreport-172-22-181-24-04123456-'
+    expect_match "case-id di nama arsip" "$(tsv 8 overcloud-computeiha-0)" '^/[^ ]*/sosreport-overcloud-computeiha-0-04123456-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7}\.tar\.xz$'
     expect_true "--keep-remote: tidak ditanya hapus" sh -c "! tmux -L cs-test-$$ capture-pane -p -J -t t -S -5000 | grep -q 'Hapus file sosreport'"
+
+    begin "case_id_prompt"
+    run_tmux "" --node overcloud-controller-2 --dest "$WORK/dest" --keep-remote
+    [[ "$(id -un)" != stack ]] && { answer 'Tetap lanjut sebagai' 1 y || return 0; }
+    answer 'Case ID Red Hat' 1 "04 123" || return 0
+    answer 'Case ID Red Hat' 2 " 04123456 " || return 0
+    answer 'Lanjutkan mengumpulkan sosreport dari 1 node' 1 y || return 0
+    answer "Ketik 'yes'" 1 yes || return 0
+    rc="$(tmux_exit)"
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "case id tidak valid ditanya ulang" "$(screen_text)" 'Case ID hanya boleh huruf'
+    expect_match "case id dari prompt dicatat" "$(log_text)" 'DECISION case_id=04123456 source=prompt'
+    expect_match "rencana memuat --case-id" "$(screen_text)" "Perintah +: $SOS_EXACT --case-id 04123456"
+    expect_true "perintah persis + --case-id dari prompt" grep -qxF "ssh"$'\t'"$C2"$'\t'"yes"$'\t'"$SOS_EXACT --case-id 04123456" "$WORK/state/calls.log"
+    expect_match "format nama arsip di node" "$(tsv 7 overcloud-controller-2)" '^/var/tmp/sosreport-overcloud-controller-2-04123456-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7}\.tar\.xz$'
+    expect_true "chown ke tripleo-admin sebelum scp" test "$(call_line "^ssh"$'\t'"$C2"$'\t.*sudo chown tripleo-admin:tripleo-admin -- /var/tmp/sosreport-overcloud-controller-2-04123456-')" -lt "$(call_line $'^scp\t'"$C2"$'\t/var/tmp/sosreport-overcloud-controller-2-04123456-')"
+    expect_eq "nama sama di undercloud" "$(basename "$(tsv 8 overcloud-controller-2)")" "$(basename "$(tsv 7 overcloud-controller-2)")"
+    expect_eq "SUCCESS" "$(tsv 6 overcloud-controller-2)" "SUCCESS"
 
     begin "case_id_invalid"
     run_tmux "" --case-id 'a;rm -rf /' --dry-run
@@ -516,8 +547,8 @@ test_locate() {
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
     expect_eq "fallback find: SUCCESS" "$(tsv 6 overcloud-computeiha-0)" "SUCCESS"
-    expect_match "fallback: file lama tidak terpilih" "$(tsv 7 overcloud-computeiha-0)" '^/var/tmp/sosreport-172-22-181-24-'
-    expect_match "metode fallback dicatat" "$(log_text)" 'LOCATE host=overcloud-computeiha-0 file=/var/tmp/sosreport-172-22-181-24-[^ ]* method=fallback'
+    expect_match "fallback: file lama tidak terpilih" "$(tsv 7 overcloud-computeiha-0)" '^/var/tmp/sosreport-overcloud-computeiha-0-'
+    expect_match "metode fallback dicatat" "$(log_text)" 'LOCATE host=overcloud-computeiha-0 file=/var/tmp/sosreport-overcloud-computeiha-0-[^ ]* method=fallback'
     expect_true "fallback memakai -newermt epoch pre-check" grep -qE "^ssh"$'\t'"$P0"$'\t'"yes"$'\t'"sudo find /var/tmp -maxdepth 1 -type f -name 'sosreport-\*\.tar\.xz' -newermt @[0-9]+ " "$WORK/state/calls.log"
     expect_eq "tidak ditemukan (file lama diabaikan)" "$(tsv 6 overcloud-computeiha-1)/$(tsv 12 overcloud-computeiha-1)" "FAILED/report file not found"
     expect_match "metode parse dicatat" "$(log_text)" 'LOCATE host=overcloud-computeiha-2 .* method=parse'
@@ -559,7 +590,7 @@ test_copy() {
     expect_true "file remote node sukses dihapus" test ! -e "$WORK/state/hosts/$P1/var_tmp/$(basename "$(tsv 7 overcloud-computeiha-1)")"
     expect_true "hapus remote tanpa sudo" grep -qE "^ssh"$'\t'"$P1"$'\t'"yes"$'\t'"rm -f -- /var/tmp/sosreport-" "$WORK/state/calls.log"
     expect_true "tidak ada sudo rm" no_call $'^sudo\t.*\trm '
-    expect_match "ringkasan: file di node tetap ada" "$(screen_text)" 'file di node tetap ada: /var/tmp/sosreport-172-22-181-24-'
+    expect_match "ringkasan: file di node tetap ada" "$(screen_text)" 'file di node tetap ada: /var/tmp/sosreport-overcloud-computeiha-0-'
 }
 
 test_cluster_membership() {
