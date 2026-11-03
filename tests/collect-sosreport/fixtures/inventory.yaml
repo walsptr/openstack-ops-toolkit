@@ -1,6 +1,6 @@
-# Fixture: /home/stack/inventory.yaml dari environment RHOSP 17.1 (Instance HA).
-# Field sensitif (os_auth_token, overcloud_admin_password) diisi nilai PALSU
-# agar tes bisa memastikan nilainya tidak pernah muncul di log/output.
+# Fixture: inventory CONTOH berformat /home/stack/inventory.yaml (RHOSP 17.1, Instance HA).
+# Bukan data environment sungguhan. Field sensitif (os_auth_token, overcloud_admin_password)
+# diisi nilai PALSU agar tes bisa memastikan nilainya tidak pernah muncul di log/output.
 Undercloud:
   hosts:
     undercloud: {}

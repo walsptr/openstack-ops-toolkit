@@ -56,7 +56,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Host key asli (format valid untuk ssh-keygen -F)
+# Host key yang dibuat saat tes (format valid untuk ssh-keygen -F)
 ssh-keygen -q -t ed25519 -N '' -f "$WORK/hostkey" >/dev/null
 HOSTKEY_PUB="$(awk '{print $1 " " $2}' "$WORK/hostkey.pub")"
 
