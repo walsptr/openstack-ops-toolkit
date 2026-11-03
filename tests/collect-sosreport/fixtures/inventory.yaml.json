@@ -1,0 +1,701 @@
+{
+    "ComputeInstanceHA": {
+        "hosts": [
+            "overcloud-computeiha-0",
+            "overcloud-computeiha-1",
+            "overcloud-computeiha-2"
+        ]
+    },
+    "Controller": {
+        "hosts": [
+            "overcloud-controller-0",
+            "overcloud-controller-1",
+            "overcloud-controller-2"
+        ]
+    },
+    "Undercloud": {
+        "hosts": [
+            "undercloud"
+        ]
+    },
+    "_meta": {
+        "hostvars": {
+            "overcloud-computeiha-0": {
+                "ansible_host": "192.168.24.24",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-computeiha-0.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-computeiha-0.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.24",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000004",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-computeiha-0.internalapi.example.com",
+                "internal_api_ip": "172.17.0.114",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-computeiha-0.monitoring.example.com",
+                "monitoring_ip": "172.20.0.114",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-computeiha-0.storage.example.com",
+                "storage_ip": "172.18.0.114",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-computeiha-0.tenant.example.com",
+                "tenant_ip": "172.16.0.114",
+                "tripleo_role_name": "ComputeInstanceHA",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "tenant"
+                ]
+            },
+            "overcloud-computeiha-1": {
+                "ansible_host": "192.168.24.25",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-computeiha-1.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-computeiha-1.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.25",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000005",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-computeiha-1.internalapi.example.com",
+                "internal_api_ip": "172.17.0.115",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-computeiha-1.monitoring.example.com",
+                "monitoring_ip": "172.20.0.115",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-computeiha-1.storage.example.com",
+                "storage_ip": "172.18.0.115",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-computeiha-1.tenant.example.com",
+                "tenant_ip": "172.16.0.115",
+                "tripleo_role_name": "ComputeInstanceHA",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "tenant"
+                ]
+            },
+            "overcloud-computeiha-2": {
+                "ansible_host": "192.168.24.26",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-computeiha-2.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-computeiha-2.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.26",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000006",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-computeiha-2.internalapi.example.com",
+                "internal_api_ip": "172.17.0.116",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-computeiha-2.monitoring.example.com",
+                "monitoring_ip": "172.20.0.116",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-computeiha-2.storage.example.com",
+                "storage_ip": "172.18.0.116",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-computeiha-2.tenant.example.com",
+                "tenant_ip": "172.16.0.116",
+                "tripleo_role_name": "ComputeInstanceHA",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "tenant"
+                ]
+            },
+            "overcloud-controller-0": {
+                "ansible_host": "192.168.24.21",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-controller-0.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-controller-0.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.21",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000001",
+                "external_hostname": "overcloud-controller-0.external.example.com",
+                "external_ip": "10.0.0.51",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-controller-0.internalapi.example.com",
+                "internal_api_ip": "172.17.0.111",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-controller-0.monitoring.example.com",
+                "monitoring_ip": "172.20.0.111",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-controller-0.storage.example.com",
+                "storage_ip": "172.18.0.111",
+                "storage_mgmt_hostname": "overcloud-controller-0.storagemgmt.example.com",
+                "storage_mgmt_ip": "172.19.0.111",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-controller-0.tenant.example.com",
+                "tenant_ip": "172.16.0.111",
+                "tripleo_role_name": "Controller",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "external",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "storage_mgmt",
+                    "tenant"
+                ]
+            },
+            "overcloud-controller-1": {
+                "ansible_host": "192.168.24.22",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-controller-1.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-controller-1.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.22",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000002",
+                "external_hostname": "overcloud-controller-1.external.example.com",
+                "external_ip": "10.0.0.52",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-controller-1.internalapi.example.com",
+                "internal_api_ip": "172.17.0.112",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-controller-1.monitoring.example.com",
+                "monitoring_ip": "172.20.0.112",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-controller-1.storage.example.com",
+                "storage_ip": "172.18.0.112",
+                "storage_mgmt_hostname": "overcloud-controller-1.storagemgmt.example.com",
+                "storage_mgmt_ip": "172.19.0.112",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-controller-1.tenant.example.com",
+                "tenant_ip": "172.16.0.112",
+                "tripleo_role_name": "Controller",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "external",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "storage_mgmt",
+                    "tenant"
+                ]
+            },
+            "overcloud-controller-2": {
+                "ansible_host": "192.168.24.23",
+                "ansible_ssh_user": "tripleo-admin",
+                "bootstrap_server_id": "00000000-0000-4000-8000-000000000001",
+                "canonical_hostname": "overcloud-controller-2.example.com",
+                "container_cli": "podman",
+                "ctlplane_hostname": "overcloud-controller-2.ctlplane.example.com",
+                "ctlplane_ip": "192.168.24.23",
+                "ctlplane_vip": "192.168.24.110",
+                "deploy_server_id": "00000000-0000-4000-8000-000000000003",
+                "external_hostname": "overcloud-controller-2.external.example.com",
+                "external_ip": "10.0.0.53",
+                "external_vip": "10.0.0.50",
+                "internal_api_hostname": "overcloud-controller-2.internalapi.example.com",
+                "internal_api_ip": "172.17.0.113",
+                "internal_api_vip": "172.17.0.110",
+                "monitoring_hostname": "overcloud-controller-2.monitoring.example.com",
+                "monitoring_ip": "172.20.0.113",
+                "redis_vip": "172.17.0.101",
+                "serial": 1,
+                "storage_hostname": "overcloud-controller-2.storage.example.com",
+                "storage_ip": "172.18.0.113",
+                "storage_mgmt_hostname": "overcloud-controller-2.storagemgmt.example.com",
+                "storage_mgmt_ip": "172.19.0.113",
+                "storage_mgmt_vip": "172.19.0.10",
+                "storage_vip": "172.18.0.10",
+                "tenant_hostname": "overcloud-controller-2.tenant.example.com",
+                "tenant_ip": "172.16.0.113",
+                "tripleo_role_name": "Controller",
+                "tripleo_role_networks": [
+                    "ctlplane",
+                    "external",
+                    "internal_api",
+                    "monitoring",
+                    "storage",
+                    "storage_mgmt",
+                    "tenant"
+                ]
+            },
+            "undercloud": {
+                "ansible_connection": "ssh",
+                "ansible_host": "localhost",
+                "ansible_python_interpreter": "/usr/bin/python3",
+                "ansible_remote_tmp": "/tmp/ansible-${USER}",
+                "ansible_ssh_private_key_file": "/var/lib/mistral/.ssh/tripleo-admin-rsa",
+                "ansible_ssh_user": "tripleo-admin",
+                "any_error_fatal": true,
+                "auth_url": "https://192.168.24.12:13000",
+                "cacert": null,
+                "max_fail_percentage": 0,
+                "os_auth_token": "FAKE-os-auth-token-9d1e7c",
+                "overcloud_admin_password": "FakeOvercloudAdminPw-4c7b2a",
+                "overcloud_horizon_url": null,
+                "overcloud_keystone_url": null,
+                "plan": "overcloud",
+                "project_name": "admin",
+                "undercloud_service_list": [
+                    "tripleo_nova_compute",
+                    "tripleo_heat_engine",
+                    "tripleo_ironic_conductor",
+                    "tripleo_swift_container_server",
+                    "tripleo_swift_object_server",
+                    "tripleo_mistral_engine"
+                ],
+                "undercloud_swift_url": "https://192.168.24.12:13000",
+                "username": "admin"
+            }
+        },
+        "profile": "inventory_legacy"
+    },
+    "all": {
+        "children": [
+            "ungrouped",
+            "Undercloud",
+            "overcloud",
+            "nova_conductor",
+            "manila_api",
+            "barbican_backend_simple_crypto",
+            "heat_api",
+            "octavia_housekeeping",
+            "horizon",
+            "manila_share",
+            "nova_scheduler",
+            "cinder_api",
+            "octavia_worker",
+            "oslo_messaging_rpc",
+            "keystone_admin_api",
+            "placement",
+            "octavia_api",
+            "container_image_prepare",
+            "manila_scheduler",
+            "nova_vnc_proxy",
+            "barbican_api",
+            "heat_api_cfn",
+            "neutron_plugin_ml2_ovn",
+            "nova_api",
+            "keystone",
+            "cinder_backup",
+            "manila_backend_netapp",
+            "ovn_dbs",
+            "clustercheck",
+            "haproxy",
+            "nova_metadata",
+            "cinder_volume",
+            "memcached",
+            "mysql",
+            "octavia_deployment_config",
+            "glance_api",
+            "oslo_messaging_notify",
+            "heat_api_cloudwatch_disabled",
+            "pacemaker",
+            "keystone_public_api",
+            "neutron_api",
+            "redis",
+            "octavia_health_manager",
+            "cinder_scheduler",
+            "heat_engine",
+            "chrony",
+            "ovn_controller",
+            "certmonger_user",
+            "mysql_client",
+            "boot_params_service",
+            "tripleo_firewall",
+            "logrotate_crond",
+            "sshd",
+            "timezone",
+            "rhsm",
+            "podman",
+            "ca_certs",
+            "tripleo_packages",
+            "tuned",
+            "iscsid",
+            "snmp",
+            "kernel",
+            "compute_instanceha",
+            "nova_compute",
+            "nova_libvirt",
+            "nova_migration_target",
+            "ovn_metadata",
+            "pacemaker_remote",
+            "nova_libvirt_guests"
+        ]
+    },
+    "allovercloud": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "barbican_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "barbican_backend_simple_crypto": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "boot_params_service": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "ca_certs": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "certmonger_user": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "chrony": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "cinder_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "cinder_backup": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "cinder_scheduler": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "cinder_volume": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "clustercheck": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "compute_instanceha": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "container_image_prepare": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "glance_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "haproxy": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "heat_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "heat_api_cfn": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "heat_api_cloudwatch_disabled": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "heat_engine": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "horizon": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "iscsid": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "kernel": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "keystone": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "keystone_admin_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "keystone_public_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "logrotate_crond": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "manila_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "manila_backend_netapp": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "manila_scheduler": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "manila_share": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "memcached": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "mysql": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "mysql_client": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "neutron_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "neutron_plugin_ml2_ovn": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "nova_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "nova_compute": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "nova_conductor": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "nova_libvirt": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "nova_libvirt_guests": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "nova_metadata": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "nova_migration_target": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "nova_scheduler": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "nova_vnc_proxy": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "octavia_api": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "octavia_deployment_config": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "octavia_health_manager": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "octavia_housekeeping": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "octavia_worker": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "oslo_messaging_notify": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "oslo_messaging_rpc": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "overcloud": {
+        "children": [
+            "allovercloud"
+        ]
+    },
+    "ovn_controller": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "ovn_dbs": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "ovn_metadata": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "pacemaker": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "pacemaker_remote": {
+        "children": [
+            "ComputeInstanceHA"
+        ]
+    },
+    "placement": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "podman": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "redis": {
+        "children": [
+            "Controller"
+        ]
+    },
+    "rhsm": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "snmp": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "sshd": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "timezone": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "tripleo_firewall": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "tripleo_packages": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    },
+    "tuned": {
+        "children": [
+            "ComputeInstanceHA",
+            "Controller"
+        ]
+    }
+}

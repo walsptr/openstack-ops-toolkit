@@ -1,0 +1,17 @@
+#!/bin/bash
+# Stub ansible-inventory: "-i FILE --list" mencetak FILE.json (hasil
+# ansible-inventory sungguhan yang disimpan sebagai fixture).
+file=""
+while (( $# > 0 )); do
+    case "$1" in
+        -i) file="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+printf 'ansible-inventory\t-\t%s\n' "$file" >> "${STUB_STATE:?}/calls.log"
+if [[ ! -f "$file.json" ]]; then
+    echo "[WARNING]: Unable to parse $file as an inventory source" >&2
+    exit 1
+fi
+echo "[WARNING]: Found variable using reserved name 'serial'." >&2
+cat "$file.json"

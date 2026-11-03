@@ -1,0 +1,383 @@
+# Fixture: /home/stack/inventory.yaml dari environment RHOSP 17.1 (Instance HA).
+# Field sensitif (os_auth_token, overcloud_admin_password) diisi nilai PALSU
+# agar tes bisa memastikan nilainya tidak pernah muncul di log/output.
+Undercloud:
+  hosts:
+    undercloud: {}
+  vars:
+    ansible_connection: ssh
+    ansible_host: localhost
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_remote_tmp: /tmp/ansible-${USER}
+    ansible_ssh_private_key_file: /var/lib/mistral/.ssh/tripleo-admin-rsa
+    ansible_ssh_user: tripleo-admin
+    any_error_fatal: true
+    auth_url: https://192.168.24.12:13000
+    cacert: null
+    max_fail_percentage: 0
+    os_auth_token: FAKE-os-auth-token-9d1e7c
+    overcloud_admin_password: FakeOvercloudAdminPw-4c7b2a
+    overcloud_horizon_url: 
+    overcloud_keystone_url: 
+    plan: overcloud
+    project_name: admin
+    undercloud_service_list: [tripleo_nova_compute, tripleo_heat_engine, tripleo_ironic_conductor,
+      tripleo_swift_container_server, tripleo_swift_object_server, tripleo_mistral_engine]
+    undercloud_swift_url: https://192.168.24.12:13000
+    username: admin
+Controller:
+  hosts:
+    overcloud-controller-0: {ansible_host: 192.168.24.21, canonical_hostname: overcloud-controller-0.example.com,
+      ctlplane_hostname: overcloud-controller-0.ctlplane.example.com, ctlplane_ip: 192.168.24.21,
+      deploy_server_id: 00000000-0000-4000-8000-000000000001, external_hostname: overcloud-controller-0.external.example.com,
+      external_ip: 10.0.0.51, internal_api_hostname: overcloud-controller-0.internalapi.example.com,
+      internal_api_ip: 172.17.0.111, monitoring_hostname: overcloud-controller-0.monitoring.example.com,
+      monitoring_ip: 172.20.0.111, storage_hostname: overcloud-controller-0.storage.example.com,
+      storage_ip: 172.18.0.111, storage_mgmt_hostname: overcloud-controller-0.storagemgmt.example.com,
+      storage_mgmt_ip: 172.19.0.111, tenant_hostname: overcloud-controller-0.tenant.example.com,
+      tenant_ip: 172.16.0.111}
+    overcloud-controller-1: {ansible_host: 192.168.24.22, canonical_hostname: overcloud-controller-1.example.com,
+      ctlplane_hostname: overcloud-controller-1.ctlplane.example.com, ctlplane_ip: 192.168.24.22,
+      deploy_server_id: 00000000-0000-4000-8000-000000000002, external_hostname: overcloud-controller-1.external.example.com,
+      external_ip: 10.0.0.52, internal_api_hostname: overcloud-controller-1.internalapi.example.com,
+      internal_api_ip: 172.17.0.112, monitoring_hostname: overcloud-controller-1.monitoring.example.com,
+      monitoring_ip: 172.20.0.112, storage_hostname: overcloud-controller-1.storage.example.com,
+      storage_ip: 172.18.0.112, storage_mgmt_hostname: overcloud-controller-1.storagemgmt.example.com,
+      storage_mgmt_ip: 172.19.0.112, tenant_hostname: overcloud-controller-1.tenant.example.com,
+      tenant_ip: 172.16.0.112}
+    overcloud-controller-2: {ansible_host: 192.168.24.23, canonical_hostname: overcloud-controller-2.example.com,
+      ctlplane_hostname: overcloud-controller-2.ctlplane.example.com, ctlplane_ip: 192.168.24.23,
+      deploy_server_id: 00000000-0000-4000-8000-000000000003, external_hostname: overcloud-controller-2.external.example.com,
+      external_ip: 10.0.0.53, internal_api_hostname: overcloud-controller-2.internalapi.example.com,
+      internal_api_ip: 172.17.0.113, monitoring_hostname: overcloud-controller-2.monitoring.example.com,
+      monitoring_ip: 172.20.0.113, storage_hostname: overcloud-controller-2.storage.example.com,
+      storage_ip: 172.18.0.113, storage_mgmt_hostname: overcloud-controller-2.storagemgmt.example.com,
+      storage_mgmt_ip: 172.19.0.113, tenant_hostname: overcloud-controller-2.tenant.example.com,
+      tenant_ip: 172.16.0.113}
+  vars:
+    ansible_ssh_user: tripleo-admin
+    bootstrap_server_id: 00000000-0000-4000-8000-000000000001
+    serial: 1
+    tripleo_role_name: Controller
+    tripleo_role_networks: [ctlplane, external, internal_api, monitoring, storage,
+      storage_mgmt, tenant]
+ComputeInstanceHA:
+  hosts:
+    overcloud-computeiha-0: {ansible_host: 192.168.24.24, canonical_hostname: overcloud-computeiha-0.example.com,
+      ctlplane_hostname: overcloud-computeiha-0.ctlplane.example.com, ctlplane_ip: 192.168.24.24,
+      deploy_server_id: 00000000-0000-4000-8000-000000000004, internal_api_hostname: overcloud-computeiha-0.internalapi.example.com,
+      internal_api_ip: 172.17.0.114, monitoring_hostname: overcloud-computeiha-0.monitoring.example.com,
+      monitoring_ip: 172.20.0.114, storage_hostname: overcloud-computeiha-0.storage.example.com,
+      storage_ip: 172.18.0.114, tenant_hostname: overcloud-computeiha-0.tenant.example.com,
+      tenant_ip: 172.16.0.114}
+    overcloud-computeiha-1: {ansible_host: 192.168.24.25, canonical_hostname: overcloud-computeiha-1.example.com,
+      ctlplane_hostname: overcloud-computeiha-1.ctlplane.example.com, ctlplane_ip: 192.168.24.25,
+      deploy_server_id: 00000000-0000-4000-8000-000000000005, internal_api_hostname: overcloud-computeiha-1.internalapi.example.com,
+      internal_api_ip: 172.17.0.115, monitoring_hostname: overcloud-computeiha-1.monitoring.example.com,
+      monitoring_ip: 172.20.0.115, storage_hostname: overcloud-computeiha-1.storage.example.com,
+      storage_ip: 172.18.0.115, tenant_hostname: overcloud-computeiha-1.tenant.example.com,
+      tenant_ip: 172.16.0.115}
+    overcloud-computeiha-2: {ansible_host: 192.168.24.26, canonical_hostname: overcloud-computeiha-2.example.com,
+      ctlplane_hostname: overcloud-computeiha-2.ctlplane.example.com, ctlplane_ip: 192.168.24.26,
+      deploy_server_id: 00000000-0000-4000-8000-000000000006, internal_api_hostname: overcloud-computeiha-2.internalapi.example.com,
+      internal_api_ip: 172.17.0.116, monitoring_hostname: overcloud-computeiha-2.monitoring.example.com,
+      monitoring_ip: 172.20.0.116, storage_hostname: overcloud-computeiha-2.storage.example.com,
+      storage_ip: 172.18.0.116, tenant_hostname: overcloud-computeiha-2.tenant.example.com,
+      tenant_ip: 172.16.0.116}
+  vars:
+    ansible_ssh_user: tripleo-admin
+    bootstrap_server_id: 00000000-0000-4000-8000-000000000001
+    serial: 1
+    tripleo_role_name: ComputeInstanceHA
+    tripleo_role_networks: [ctlplane, internal_api, monitoring, storage, tenant]
+allovercloud:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {container_cli: podman, ctlplane_vip: 192.168.24.110, external_vip: 10.0.0.50,
+    internal_api_vip: 172.17.0.110, redis_vip: 172.17.0.101, storage_mgmt_vip: 172.19.0.10,
+    storage_vip: 172.18.0.10}
+overcloud:
+  children:
+    allovercloud: {}
+nova_conductor:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+manila_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+barbican_backend_simple_crypto:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+heat_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+octavia_housekeeping:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+horizon:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+manila_share:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_scheduler:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+cinder_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+octavia_worker:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+oslo_messaging_rpc:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+keystone_admin_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+placement:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+octavia_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+container_image_prepare:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+manila_scheduler:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_vnc_proxy:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+barbican_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+heat_api_cfn:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+neutron_plugin_ml2_ovn:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+keystone:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+cinder_backup:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+manila_backend_netapp:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+ovn_dbs:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+clustercheck:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+haproxy:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_metadata:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+cinder_volume:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+memcached:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+mysql:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+octavia_deployment_config:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+glance_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+oslo_messaging_notify:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+heat_api_cloudwatch_disabled:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+pacemaker:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+keystone_public_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+neutron_api:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+redis:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+octavia_health_manager:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+cinder_scheduler:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+heat_engine:
+  children:
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+chrony:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+ovn_controller:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+certmonger_user:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+mysql_client:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+boot_params_service:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+tripleo_firewall:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+logrotate_crond:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+sshd:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+timezone:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+rhsm:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+podman:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+ca_certs:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+tripleo_packages:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+tuned:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+iscsid:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+snmp:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+kernel:
+  children:
+    ComputeInstanceHA: {}
+    Controller: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+compute_instanceha:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_compute:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_libvirt:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_migration_target:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+ovn_metadata:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+pacemaker_remote:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}
+nova_libvirt_guests:
+  children:
+    ComputeInstanceHA: {}
+  vars: {ansible_ssh_user: tripleo-admin}

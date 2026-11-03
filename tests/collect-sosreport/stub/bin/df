@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stub df: ruang kosong palsu (STUB_FREE_KB, default 50 GiB) untuk /var/tmp node
+avail="${STUB_FREE_KB:-52428800}"
+echo "Filesystem     1024-blocks     Used Available Capacity Mounted on"
+echo "/dev/vda4        104857600 10000000 $avail 10% /"

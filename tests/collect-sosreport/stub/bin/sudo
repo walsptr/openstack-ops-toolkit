@@ -1,0 +1,19 @@
+#!/bin/bash
+# Stub sudo (remote lewat stub ssh, dan lokal untuk undercloud lewat PATH).
+# chown hanya dicatat (tes tidak bisa chown ke tripleo-admin/stack).
+printf 'sudo\t%s\t%s\n' "${STUB_HOST:-local}" "$*" >> "${STUB_STATE:?}/calls.log"
+if [[ "${SUDO_FAIL:-0}" == 1 ]]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+fi
+[[ "${1:-}" == "-n" ]] && shift
+if [[ "${1:-}" == "chown" ]]; then
+    shift
+    [[ "${CHOWN_FAIL:-0}" == 1 ]] && { echo "chown: operation not permitted" >&2; exit 1; }
+    for f in "$@"; do
+        [[ "$f" == -- || "$f" == *:* ]] && continue
+        [[ -e "$f" ]] || { echo "chown: cannot access '$f': No such file or directory" >&2; exit 1; }
+    done
+    exit 0
+fi
+exec "$@"

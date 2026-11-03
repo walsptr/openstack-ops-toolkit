@@ -7,7 +7,7 @@
 # Launcher interaktif untuk operational scripts. Script ditemukan
 # otomatis (auto-discovery) dengan memindai direktori kategori di
 # workdir dan membaca metadata di header script (@name, @description,
-# @mutates, @requires, @tags). scripts.env bersifat opsional sebagai
+# @mutates, @requires, @tags, @platform). scripts.env bersifat opsional sebagai
 # file override lokal (rename, hide, custom script).
 #
 # Tampilan terinspirasi k9s: info panel & key hints di atas, tabel
@@ -26,6 +26,9 @@ LOGGING=0
 RS=$'\x1f'
 
 SELF="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+
+# @platform: rhosp terpenuhi jika file ini ada (override untuk tes)
+RHOSP_RELEASE_FILE="${OSOPS_RHOSP_RELEASE_FILE:-/etc/rhosp-release}"
 
 # Warna
 if [[ -t 1 || -n "${OOT_COLOR:-}" ]]; then
@@ -129,16 +132,17 @@ resolve_path() {
 #   # @mutates:     no
 #   # @requires:    admin
 #   # @tags:        neutron, port, cleanup
+#   # @platform:    rhosp          (opsional)
 #   # ============================================================
 #
 # Blok header = baris comment setelah shebang (baris kosong diabaikan),
 # berhenti di baris pertama yang bukan comment.
 #
 # Record internal (dipisah RS):
-#   path  rel  category  name  mutates  requires  tags  description  source  warn
+#   path  rel  category  name  mutates  requires  tags  description  source  warn  platform
 
 # Parse header satu atau lebih file.
-# Output per file: path RS name RS mutates RS requires RS tags RS description RS warn
+# Output per file: path RS name RS mutates RS requires RS tags RS description RS warn RS platform
 parse_headers() {
     (( $# == 0 )) && return 0
 
@@ -156,13 +160,13 @@ parse_headers() {
                 m = "yes"
             }
             d = (desc != "") ? desc : fallback
-            print file, name, m, requires, tags, d, w
+            print file, name, m, requires, tags, d, w, platform
         }
 
         FNR == 1 {
             flush()
             file = FILENAME
-            name = mutates = requires = tags = desc = fallback = ""
+            name = mutates = requires = tags = desc = fallback = platform = ""
             inhdr = 1
             if ($0 ~ /^#!/) next
         }
@@ -193,6 +197,7 @@ parse_headers() {
                 else if (key == "mutates") mutates = val
                 else if (key == "requires") requires = val
                 else if (key == "tags") tags = val
+                else if (key == "platform") platform = tolower(val)
                 next
             }
 
@@ -225,11 +230,11 @@ discover_records() {
 
     (( ${#files[@]} == 0 )) && return 0
 
-    local file name m req tags desc warn
-    while IFS="$RS" read -r file name m req tags desc warn; do
+    local file name m req tags desc warn plat
+    while IFS="$RS" read -r file name m req tags desc warn plat; do
         [[ -z "$name" ]] && continue
         rel="${file#"$root"/}"
-        printf '%s\n' "$file$RS$rel$RS${rel%%/*}$RS$name$RS$m$RS$req$RS$tags$RS$desc${RS}discovered$RS$warn"
+        printf '%s\n' "$file$RS$rel$RS${rel%%/*}$RS$name$RS$m$RS$req$RS$tags$RS$desc${RS}discovered$RS$warn$RS$plat"
     done < <(parse_headers "${files[@]}")
 }
 
@@ -254,7 +259,7 @@ script_records() {
 
     if [[ -f "$env_file" ]]; then
         local line p abs oname
-        local path rel cat name m req tags desc src warn
+        local path rel cat name m req tags desc src warn plat
 
         while IFS= read -r line || [[ -n "$line" ]]; do
             line="${line%$'\r'}"
@@ -283,17 +288,17 @@ script_records() {
             if [[ -n "${idx[$abs]+x}" ]]; then
                 # Rename (termasuk format lama: entry identik => tidak duplikat)
                 i=${idx[$abs]}
-                IFS="$RS" read -r path rel cat name m req tags desc src warn <<< "${recs[$i]}"
-                recs[i]="$path$RS$rel$RS$cat$RS$oname$RS$m$RS$req$RS$tags$RS$desc$RS$src$RS$warn"
+                IFS="$RS" read -r path rel cat name m req tags desc src warn plat <<< "${recs[$i]}"
+                recs[i]="$path$RS$rel$RS$cat$RS$oname$RS$m$RS$req$RS$tags$RS$desc$RS$src$RS$warn$RS$plat"
             else
                 # Custom script (di luar discovery)
-                name="" m="" req="" tags="" desc="" warn=""
+                name="" m="" req="" tags="" desc="" warn="" plat=""
                 if [[ -r "$abs" ]]; then
-                    IFS="$RS" read -r _ name m req tags desc warn < <(parse_headers "$abs")
+                    IFS="$RS" read -r _ name m req tags desc warn plat < <(parse_headers "$abs")
                 else
                     desc="⚠️  script tidak ditemukan"
                 fi
-                recs+=("$abs$RS$p${RS}custom$RS$oname$RS${m:-no}$RS$req$RS$tags$RS$desc${RS}custom$RS$warn")
+                recs+=("$abs$RS$p${RS}custom$RS$oname$RS${m:-no}$RS$req$RS$tags$RS$desc${RS}custom$RS$warn$RS$plat")
                 idx["$abs"]=$(( ${#recs[@]} - 1 ))
             fi
         done < "$env_file"
@@ -308,10 +313,10 @@ script_records() {
 # Muat hasil script_records ke array paralel S_*
 load_scripts() {
     S_PATH=() S_REL=() S_CAT=() S_NAME=() S_MUT=()
-    S_REQ=() S_TAGS=() S_DESC=() S_SRC=() S_WARN=()
+    S_REQ=() S_TAGS=() S_DESC=() S_SRC=() S_WARN=() S_PLAT=()
 
-    local path rel cat name m req tags desc src warn
-    while IFS="$RS" read -r path rel cat name m req tags desc src warn; do
+    local path rel cat name m req tags desc src warn plat
+    while IFS="$RS" read -r path rel cat name m req tags desc src warn plat; do
         S_PATH+=("$path")
         S_REL+=("$rel")
         S_CAT+=("$cat")
@@ -322,7 +327,27 @@ load_scripts() {
         S_DESC+=("$desc")
         S_SRC+=("$src")
         S_WARN+=("$warn")
+        S_PLAT+=("$plat")
     done < <(script_records)
+}
+
+# @platform terpenuhi di host ini? Alasan (jika tidak) di PLATFORM_NOTE.
+# Nilai tidak dikenal => tidak terpenuhi (fail safe).
+platform_ok() {
+    PLATFORM_NOTE=""
+    case "$1" in
+        "")
+            return 0
+            ;;
+        rhosp)
+            [[ -f "$RHOSP_RELEASE_FILE" ]] && return 0
+            PLATFORM_NOTE="$RHOSP_RELEASE_FILE tidak ada"
+            ;;
+        *)
+            PLATFORM_NOTE="@platform tidak dikenal (\"$1\"), dianggap tidak terpenuhi"
+            ;;
+    esac
+    return 1
 }
 
 # Index script berdasarkan path absolut
@@ -346,14 +371,19 @@ find_index() {
 # Baris pertama adalah header tabel (fzf --header-lines=1).
 # Kolom TAGS di paling kanan dan tidak dipotong agar ikut fuzzy search.
 cmd_rows() {
-    local i w_name=4 w_cat=8 w_desc=11 desc mut
+    local i w_name=4 w_cat=8 w_desc=11 desc mut plain name_cell
+    local -a suffix=()
 
     load_scripts
 
     for i in "${!S_PATH[@]}"; do
         [[ -f "${S_PATH[$i]}" ]] || S_DESC[i]="⚠️  script tidak ditemukan"
 
-        (( ${#S_NAME[$i]} > w_name )) && w_name=${#S_NAME[$i]}
+        # Penanda platform tidak terpenuhi, mis. "(rhosp only)"
+        suffix[i]=""
+        platform_ok "${S_PLAT[$i]}" || suffix[i]=" (${S_PLAT[$i]} only)"
+
+        (( ${#S_NAME[$i]} + ${#suffix[$i]} > w_name )) && w_name=$(( ${#S_NAME[$i]} + ${#suffix[$i]} ))
         (( ${#S_CAT[$i]} > w_cat )) && w_cat=${#S_CAT[$i]}
         (( ${#S_DESC[$i]} > w_desc )) && w_desc=${#S_DESC[$i]}
     done
@@ -376,9 +406,17 @@ cmd_rows() {
 
         printf -v desc '%-*s' "$w_desc" "$(trunc "${S_DESC[$i]}" "$w_desc")"
 
-        printf '%s\t%s\t%-*s  %s%-*s%s  %s  %s%s%s  %s%s%s\n' \
+        # Nama + akhiran redup, dipadding manual (warna tidak dihitung lebar)
+        plain="$(trunc "${S_NAME[$i]}${suffix[$i]}" "$w_name")"
+        name_cell="$plain"
+        if [[ -n "${suffix[$i]}" && "$plain" == *"${suffix[$i]}" ]]; then
+            name_cell="${plain%"${suffix[$i]}"}$C_DIM${suffix[$i]}$C_RESET"
+        fi
+        printf -v name_cell '%s%*s' "$name_cell" $(( w_name - ${#plain} )) ""
+
+        printf '%s\t%s\t%s  %s%-*s%s  %s  %s%s%s  %s%s%s\n' \
             "${S_PATH[$i]}" "${S_NAME[$i]}" \
-            "$w_name" "$(trunc "${S_NAME[$i]}" "$w_name")" \
+            "$name_cell" \
             "$C_MAGENTA" "$w_cat" "$(trunc "${S_CAT[$i]}" "$w_cat")" "$C_RESET" \
             "$mut" \
             "$C_DIM" "$desc" "$C_RESET" \
@@ -422,6 +460,13 @@ cmd_preview() {
         echo "${C_ORANGE}Mutates  :${C_RESET} ${C_GREEN}no${C_RESET} ${C_DIM}(read-only)${C_RESET}"
     fi
     echo "${C_ORANGE}Requires :${C_RESET} ${S_REQ[$i]:--}"
+    if [[ -n "${S_PLAT[$i]}" ]]; then
+        if platform_ok "${S_PLAT[$i]}"; then
+            echo "${C_ORANGE}Platform :${C_RESET} ${S_PLAT[$i]} ${C_GREEN}(terpenuhi)${C_RESET}"
+        else
+            echo "${C_ORANGE}Platform :${C_RESET} ${C_YELLOW}${S_PLAT[$i]} — tidak terpenuhi${C_RESET} ${C_DIM}($PLATFORM_NOTE; script tidak bisa dijalankan dari host ini)${C_RESET}"
+        fi
+    fi
     echo "${C_ORANGE}Tags     :${C_RESET} ${S_TAGS[$i]:--}"
     echo "${C_ORANGE}Lines    :${C_RESET} $(wc -l < "$path")"
     [[ -n "${S_WARN[$i]}" ]] && echo "${C_YELLOW}⚠️  ${S_WARN[$i]}${C_RESET}"
@@ -697,6 +742,17 @@ run_script() {
         return
     fi
 
+    # @platform tidak terpenuhi: tampilkan pesan, jangan jalankan
+    if ! platform_ok "${S_PLAT[$i]}"; then
+        echo "${C_YELLOW}⚠️  Script ini hanya berlaku di environment ${C_BOLD}${S_PLAT[$i]}${C_RESET}${C_YELLOW} — tidak dijalankan.${C_RESET}"
+        echo "   $PLATFORM_NOTE"
+        FLASH="${C_YELLOW}Hanya untuk ${S_PLAT[$i]}: $name${C_RESET}"
+        _LOG_RUN_ID="$run_id" tlog INFO RUN_BLOCKED "script=$rel" "name=$name" \
+            "platform=${S_PLAT[$i]}" "reason=$PLATFORM_NOTE" result=SKIPPED
+        pause
+        return
+    fi
+
     # Konfirmasi level launcher untuk script yang mengubah resource
     # (tambahan, bukan pengganti konfirmasi di dalam script)
     if [[ "${S_MUT[$i]}" == "yes" ]]; then
@@ -762,7 +818,8 @@ menu_plain() {
             if [[ -z "$filter" || "${haystack,,}" == *"${filter,,}"* ]]; then
                 shown+=("$i")
                 mark=""
-                [[ "${S_MUT[$i]}" == "yes" ]] && mark="  ${C_RED}⚠️  mutates${C_RESET}"
+                platform_ok "${S_PLAT[$i]}" || mark+="  ${C_DIM}(${S_PLAT[$i]} only)${C_RESET}"
+                [[ "${S_MUT[$i]}" == "yes" ]] && mark+="  ${C_RED}⚠️  mutates${C_RESET}"
                 printf '  %2d. %-32s %s[%s]%s%s\n' "${#shown[@]}" "${S_NAME[$i]}" \
                     "$C_MAGENTA" "${S_CAT[$i]}" "$C_RESET" "$mark" >&2
             fi

@@ -1,0 +1,98 @@
+#!/bin/bash
+# Stub ssh untuk tests/collect-sosreport: menjalankan perintah "remote" secara
+# lokal di direktori palsu per host ($STUB_STATE/hosts/<ip>/), dengan
+# /var/tmp dan /etc/rhosp-release dipetakan ke direktori itu dan PATH berisi
+# stub sudo/pcs/rpm/df/sosreport. Setiap panggilan dicatat di calls.log.
+#
+# Perilaku per host (hosts/<ip>/env): UNREACHABLE, HOSTKEY_CHANGED, AUTH_FAIL,
+# SUDO_FAIL, SOS_MISSING, SOS_MODE, SOS_SLEEP, SOS_NO_SHAFILE, SOS_NO_HASHLINE,
+# STUB_FREE_KB, PCS_*, SCP_FAIL, SCP_CORRUPT, CHOWN_FAIL.
+set -o nounset
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shk=""
+
+while (( $# > 0 )); do
+    case "$1" in
+        -o) [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"; shift 2 ;;
+        -i|-p) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+dest="$1"
+shift
+cmd="$*"
+host="${dest#*@}"
+hd="$S/hosts/$host"
+
+printf 'ssh\t%s\t%s\t%s\n' "$host" "$shk" "${cmd//$'\n'/ ; }" >> "$S/calls.log"
+
+if [[ ! -d "$hd" ]]; then
+    echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+    exit 255
+fi
+
+# Default per host, lalu override dari env host
+UNREACHABLE=0 HOSTKEY_CHANGED=0 AUTH_FAIL=0 SOS_MISSING=0
+# Di-export: dibaca oleh stub sudo/sosreport/pcs/df di bawah
+export SUDO_FAIL=0 SOS_MODE=normal SOS_SLEEP=0 SOS_NO_SHAFILE=0 SOS_NO_HASHLINE=0
+export STUB_FREE_KB="" CHOWN_FAIL=0 PCS_FAIL=0 PCS_NO_PROPCONFIG=0 PCS_DISABLE_FAIL=0
+export PCS_SET_NOOP=0 PCS_ENABLE_FAIL=0 PCS_UNSET_FAIL=0 PCS_ENABLE_SLEEP=0
+set -a
+# shellcheck disable=SC1091
+[[ -f "$hd/env" ]] && source "$hd/env"
+set +a
+
+if [[ "$UNREACHABLE" == 1 ]]; then
+    echo "ssh: connect to host $host port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$HOSTKEY_CHANGED" == 1 ]]; then
+    cat >&2 <<MSG
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Host key for $host has changed and you have requested strict checking.
+Host key verification failed.
+MSG
+    exit 255
+fi
+
+# Host key: "yes" butuh entry di known_hosts; "accept-new" menambahkannya
+if ! ssh-keygen -F "$host" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+    if [[ "$shk" == "accept-new" ]]; then
+        printf '%s %s\n' "$host" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
+        echo "Warning: Permanently added '$host' (ED25519) to the list of known hosts." >&2
+    else
+        echo "No ED25519 host key is known for $host and you have requested strict checking." >&2
+        echo "Host key verification failed." >&2
+        exit 255
+    fi
+fi
+
+if [[ "$AUTH_FAIL" == 1 ]]; then
+    echo "tripleo-admin@$host: Permission denied (publickey,gssapi-keyex,gssapi-with-mic)." >&2
+    exit 255
+fi
+
+mkdir -p "$hd/bin" "$hd/var_tmp"
+for t in sudo pcs rpm df sosreport; do
+    ln -sfn "$HERE/bin/$t" "$hd/bin/$t"
+done
+[[ "$SOS_MISSING" == 1 ]] && rm -f "$hd/bin/sosreport"
+
+c="${cmd//\/var\/tmp/$hd/var_tmp}"
+c="${c//\/etc\/rhosp-release/$hd/rhosp-release}"
+
+o="$(mktemp)" e="$(mktemp)"
+rc=0
+STUB_HOST="$host" STUB_SOS_DIR="$hd/var_tmp" PATH="$hd/bin:/usr/bin:/bin" \
+    bash -c "$c" > "$o" 2> "$e" < /dev/null || rc=$?
+sed "s#$hd/var_tmp#/var/tmp#g" "$o"
+sed "s#$hd/var_tmp#/var/tmp#g" "$e" >&2
+rm -f "$o" "$e"
+exit "$rc"

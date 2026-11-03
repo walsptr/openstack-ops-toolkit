@@ -24,7 +24,7 @@ The TUI (`main.sh`) only borrows the **look and feel** of k9s (info panel, key h
 main.sh               Entry point: k9s-style TUI launcher (fzf), --no-fzf fallback, --list
 install.sh            Installer: requirement checks, copies category dirs + lib/, creates log/, installs command
 scripts.env.example   Example of the OPTIONAL local override file
-<category>/*.sh       Operational scripts (identity/, images/, network/, servers/, volumes/, ...)
+<category>/*.sh       Operational scripts (identity/, images/, network/, rhosp/, servers/, volumes/, ...)
 lib/                  Shared helpers for scripts — never listed in the TUI
 lib/logging.sh        Mandatory logging library (sourced by every script and by main.sh)
 lib/api.sh            Shared helper for direct API access with curl (token on stdin, catalog endpoint, pagination)
@@ -51,8 +51,10 @@ The same parser is used everywhere: TUI table, preview pane, `Ctrl-R` reload, `-
 Internal record format (fields separated by `\x1f` so empty fields survive `read`):
 
 ```
-path  rel  category  name  mutates  requires  tags  description  source(discovered|custom)  warn
+path  rel  category  name  mutates  requires  tags  description  source(discovered|custom)  warn  platform
 ```
+
+New fields are appended at the end (`install.sh` reads records with `_` as the last field).
 
 ### `scripts.env` override (optional, local, not tracked by git)
 
@@ -84,6 +86,7 @@ Relative paths resolve against the workdir; paths are compared after normalizati
 | `@mutates` | No | `yes` / `no`, default `no`. Any other value is treated as `yes` with a warning (fail safe). |
 | `@requires` | No | Free text, e.g. `admin`, `admin, cinder`. Shown in preview and confirmation. |
 | `@tags` | No | Comma-separated. Included in fuzzy search. |
+| `@platform` | No | Environment the script is made for. Supported: `rhosp` (met when `/etc/rhosp-release` exists; `OSOPS_RHOSP_RELEASE_FILE` overrides the path for tests). Not met: still listed, marked `(<platform> only)` in the fzf table and `--no-fzf` menu, preview shows `Platform : <platform> — tidak terpenuhi`, `Enter` shows a message and does not run it (`RUN_BLOCKED result=SKIPPED` in `toolkit.log`). Unknown values count as not met (fail safe). `--list` output never depends on it (must be identical on every host). Only a TUI marker: the script must check its environment itself. |
 
 Parsing rules:
 
@@ -113,14 +116,14 @@ Every operational script logs through `lib/logging.sh`. Rules:
 * When the script already printed an error/warning, log it with `log_error -q` / `log_warn -q` so terminal output does not change.
 * **Never log secrets:** no `OS_PASSWORD`, tokens, application credential secrets, or any variable containing `PASSWORD`, `SECRET`, or `TOKEN` (the library also redacts their values as a safety net — do not rely on it).
 * **Never `tee` the whole script output** (or wrap scripts in `tee` in `main.sh`): it breaks interactive prompts, colors, and fzf. Log explicitly.
-* Do not set your own `EXIT`/`INT`/`TERM` trap in a script — it replaces the library's `START`/`END` trap. For cleanup on `Ctrl-C`/SIGTERM set `LOG_INTERRUPT_HOOK=<function>`; the library calls it (once; a second signal exits immediately) before `exit 130/143`, so `main.sh` still returns to the TUI. The hook must not block forever (use `read -t`). For cleanup that must run on every exit (normal, error, signal), e.g. temporary files, set `LOG_EXIT_HOOK=<function>` (called once, before the `END` line).
+* Do not set your own `EXIT`/`INT`/`TERM` trap in a script — it replaces the library's `START`/`END` trap. For cleanup on `Ctrl-C`/SIGTERM set `LOG_INTERRUPT_HOOK=<function>`; the library calls it (once; a second signal exits immediately) before `exit 130/143`, so `main.sh` still returns to the TUI. The hook must not block forever (use `read -t`). For cleanup that must run on every exit (normal, error, signal), e.g. temporary files, set `LOG_EXIT_HOOK=<function>` (called once, before the `END` line). Only exception: a bounded restore of a temporary cluster change may ignore signals inside `LOG_EXIT_HOOK` (see "Temporary changes to cluster configuration").
 * After `log_init`, `LOG_FILE` and `LOG_RUN_ID` are available (e.g. for per-run report files next to the log). Use `log_event DECISION ...` for user decisions and `log_info` with `dry_run=true` (never `log_result`) for planned-only actions.
 * **Do not hardcode log paths or category names.** The log directory comes from `OSOPS_LOG_DIR` / `LOG_DIR` / `<toolkit root>/log` (with the XDG fallback); the category is derived from the script path. Logging failures must never fail a script.
 * Line format: `<ISO8601+TZ> <LEVEL> run=<run_id> user=<operator> <EVENT> key=value ...`. `main.sh` passes `OSOPS_RUN_ID` so `toolkit.log` and the script log share the `run_id`.
 
 ## Script conventions (OpenStack CLI, JSON, prompts)
 
-These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`, `network/collect-public-fip.sh`, `servers/list-instances-by-host.sh` and `network/get-ip-info.sh` and apply to every new script:
+These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`, `network/collect-public-fip.sh`, `servers/list-instances-by-host.sh`, `network/get-ip-info.sh` and `rhosp/collect-sosreport.sh` and apply to every new script:
 
 * **Call the OpenStack CLI through one wrapper:** an array `OS_CMD=(openstack)` (overridable with the env string `OSOPS_OS_CMD`, split with `read -ra`, because arrays cannot be exported) and a function `os_cli` (plus `os_run` = `log_run` for changing actions). Never call `openstack` directly elsewhere in the script. This keeps scripts testable with a stub and ready for RHOSO (`oc exec ... openstack`).
 * **Scripts that use the compute API: pin the compute microversion in one variable** (overridable via env), pass it through the wrapper (`--os-compute-api-version`), check the cloud maximum (`versions show --service compute`) and warn about affected features.
@@ -147,6 +150,10 @@ These rules come from `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `im
 * **Output files meant as input for another script must follow that script's input format exactly** (e.g. `.ids` files for `servers/live-migrate.sh --file`: `#` comments, one ID per line) and be verified in the tests with that script's own parser.
 * **Output files with sensitive data** (project names, public IPs, ...) are created with permission `600` (`umask 077`) and `noclobber`, never overwriting an existing file. Temporary directories: `mktemp -d` under `umask 077`, removed in `LOG_EXIT_HOOK`.
 * **Instance ports: match `device_owner` by the prefix `compute:`** (the value is `compute:<availability-zone>`), never by `compute:nova` only.
+* **Temporary changes to cluster configuration** (e.g. Pacemaker `stonith-enabled`) must: record the original value (including "not set"), restore exactly that value — never an assumed one (`unset` → `pcs property unset`, not `set true`) — and verify it; be guaranteed through the library's trap hooks (`LOG_EXIT_HOOK`, plus `LOG_INTERRUPT_HOOK` to stop workers), not an own `EXIT`/`INT`/`TERM` trap; and write a state file (run id, controller, original value, time) *before* the change, removed only after a verified restore, so the next run can detect a crash (`kill -9`, lost SSH) and offer to restore. If the state file cannot be written, do not make the change. Try another controller when the restore fails; if all fail, show the manual command, keep the state file, log `FAILED`, and exit non-zero. Keep the window short (change only when a selected resource needs it, restore as soon as that part is done). The only exception to "no own trap": inside `LOG_EXIT_HOOK`, `trap '' INT TERM HUP` for the bounded restore, so a second `Ctrl-C` cannot cut it short.
+* **Inventory hostvars are never printed or logged as a whole** (`ansible-inventory --list` output contains secrets such as `overcloud_admin_password`, `os_auth_token`). Extract only the needed fields with `jq` (hostname, role, `ansible_host`, user, key path, port) and keep the JSON in the `umask 077` temp directory. Do not let group vars of the `Undercloud` group (e.g. its private key) apply to overcloud nodes.
+* **Remote commands go through one SSH wrapper and one SCP wrapper** (`ssh_node` / `scp_fetch`, binaries overridable with `OSOPS_SSH` / `OSOPS_SCP`): `BatchMode=yes`, `ConnectTimeout`, `ServerAliveInterval`, no `-t`, stdin from `/dev/null`, a local `timeout`. Never disable host key checking silently: known hosts use `StrictHostKeyChecking=yes`, unknown hosts need one explicit confirmation for `accept-new`, a changed key is a `SKIPPED` resource. Validate inventory values (hostname, IP, user, port) before they become `ssh` arguments.
+* **Background workers** (non-interactive bash) ignore `SIGINT`: kill them (and their process tree) explicitly in `LOG_INTERRUPT_HOOK` / `LOG_EXIT_HOOK`. Workers never prompt; they write status to a file the main process reads.
 * **Known limitation (RHOSO):** `OSOPS_OS_CMD` only changes how the CLI is called; the toolkit's `OS_*` credentials are not passed into an `oc exec` pod, which needs its own `clouds.yaml`/environment. Document it, do not try to forward secrets.
 
 ## Development Standards
@@ -198,6 +205,7 @@ bash tests/upload-img/run.sh                # upload-img tests (stub CLI + stub 
 bash tests/collect-public-fip/run.sh        # collect-public-fip tests (stub CLI + stub curl, tmux)
 bash tests/list-instances-by-host/run.sh    # list-instances-by-host tests (stub CLI + stub curl, tmux)
 bash tests/get-ip-info/run.sh               # get-ip-info + lib/netinfo.sh + install.sh rename tests (stub CLI + stub curl, tmux, unshare -r)
+bash tests/collect-sosreport/run.sh         # collect-sosreport + @platform in main.sh (stub ssh/scp/ansible-inventory/sudo/sosreport/pcs/fzf, tmux, ssh-keygen)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)
@@ -205,7 +213,7 @@ bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an
 
 Logging checks: after running scripts, inspect `./log/<category>/*.log` and `./log/toolkit.log` (format, `run_id` shared with `toolkit.log`); set `OSOPS_LOG_DIR` to a read-only directory to test the fallback warning; grep the log directory for the test RC file's `OS_PASSWORD` value (must return nothing).
 
-Scripts that call the OpenStack CLI through `os_cli` are tested with a stub CLI (`OSOPS_OS_CMD=tests/<name>/stub/openstack`) returning JSON fixtures, driven in tmux because prompts read `/dev/tty`. Other external tools are stubbed the same way through an override variable (e.g. `OSOPS_QEMU_IMG`, `OSOPS_CURL`, `OSOPS_FZF`). Put stubs and fixtures under `tests/<name>/` (stub without `.sh` extension, runner without `@name`). Behavior that only a real cloud shows (abort timing, CLI output format of other OSC versions) must be reported as not verified.
+Scripts that call the OpenStack CLI through `os_cli` are tested with a stub CLI (`OSOPS_OS_CMD=tests/<name>/stub/openstack`) returning JSON fixtures, driven in tmux because prompts read `/dev/tty`. Other external tools are stubbed the same way through an override variable (e.g. `OSOPS_QEMU_IMG`, `OSOPS_CURL`, `OSOPS_FZF`, `OSOPS_SSH`, `OSOPS_SCP`, `OSOPS_ANSIBLE_INVENTORY`); local `sudo`/`sosreport` are stubbed through `PATH`. Remote commands are tested with a stub `ssh` that runs the real command string against a fake per-host directory (paths such as `/var/tmp` mapped), so the exact commands the script sends are exercised. Put stubs and fixtures under `tests/<name>/` (stub without `.sh` extension, runner without `@name`). Behavior that only a real cloud shows (abort timing, CLI output format of other OSC versions) must be reported as not verified.
 
 Override behavior can be tested with a temporary workdir containing a `scripts.env` (rename, `!path`, custom absolute path, old format). The TUI needs an interactive terminal; tmux (`send-keys` / `capture-pane`) works for scripted checks. A stub `openstack` command in `PATH` avoids touching a real cloud.
 

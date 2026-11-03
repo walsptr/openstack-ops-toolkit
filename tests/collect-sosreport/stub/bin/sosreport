@@ -1,0 +1,47 @@
+#!/bin/bash
+# Stub sosreport: format output sos 4.x (RHEL 9). Mode lewat env:
+#   SOS_MODE=normal|noparse|none|fail   SOS_SLEEP=<detik>
+#   SOS_NO_SHAFILE=1 (tanpa .sha256)    SOS_NO_HASHLINE=1 (tanpa baris sha256)
+#   SOS_NAME=<nama arsip tetap>
+printf 'sosreport\t%s\t%s\n' "${STUB_HOST:-local}" "$*" >> "${STUB_STATE:?}/calls.log"
+dir="${STUB_SOS_DIR:?}"
+case_id=""
+while (( $# > 0 )); do
+    [[ "$1" == "--case-id" ]] && case_id="$2"
+    shift
+done
+
+echo "sos report (version 4.5.6)"
+echo
+echo "This command will collect diagnostic and configuration information from"
+echo "this Red Hat Enterprise Linux system and installed applications."
+echo
+echo " Setting up archive ..."
+echo " Running plugins. Please wait ..."
+(( ${SOS_SLEEP:-0} > 0 )) && sleep "$SOS_SLEEP"
+
+if [[ "${SOS_MODE:-normal}" == "fail" ]]; then
+    echo "Error: plugin failure, unable to finalize archive" >&2
+    exit 1
+fi
+
+name="sosreport-${STUB_HOST:-undercloud}"
+name="${name//./-}${case_id:+-$case_id}-$(date +%Y-%m-%d)-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-7).tar.xz"
+[[ -n "${SOS_NAME:-}" ]] && name="$SOS_NAME"
+[[ "${SOS_MODE:-normal}" == "none" ]] && { echo " Finished running plugins"; exit 0; }
+
+head -c 4096 /dev/urandom > "$dir/$name"
+chmod 600 "$dir/$name"
+hash="$(sha256sum "$dir/$name" | awk '{print $1}')"
+[[ "${SOS_NO_SHAFILE:-0}" == 1 ]] || echo "$hash" > "$dir/$name.sha256"
+
+echo " Finished running plugins"
+echo "Creating compressed archive..."
+if [[ "${SOS_MODE:-normal}" == "noparse" ]]; then
+    echo "Archive written (output format changed)."
+    exit 0
+fi
+printf '\nYour sos report has been generated and saved in:\n\t%s\n\n' "$dir/$name"
+printf ' Size\t4.00KiB\n Owner\troot\n'
+[[ "${SOS_NO_HASHLINE:-0}" == 1 ]] || printf ' sha256\t%s\n' "$hash"
+printf '\nPlease send this file to your support representative.\n\n'

@@ -1,0 +1,33 @@
+#!/bin/bash
+# Stub scp: menyalin dari direktori palsu host ($STUB_STATE/hosts/<ip>/var_tmp).
+set -o nounset
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+while (( $# > 0 )); do
+    case "$1" in
+        -o|-i|-P) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+src="$1" dst="$2"
+host="${src#*@}"
+host="${host%%:*}"
+path="${src#*:}"
+host="${host#[}"
+host="${host%]}"
+hd="$S/hosts/$host"
+
+printf 'scp\t%s\t%s\t%s\n' "$host" "$path" "$dst" >> "$S/calls.log"
+
+SCP_FAIL=0 SCP_CORRUPT=0 UNREACHABLE=0
+# shellcheck disable=SC1091
+[[ -f "$hd/env" ]] && source "$hd/env"
+
+[[ "$UNREACHABLE" == 1 || "$SCP_FAIL" == 1 ]] && { echo "scp: Connection closed" >&2; exit 1; }
+
+cp -- "${path//\/var\/tmp/$hd/var_tmp}" "$dst" || exit 1
+[[ "$SCP_CORRUPT" == 1 && "$dst" != *.sha256 ]] && printf 'X' >> "$dst"
+exit 0

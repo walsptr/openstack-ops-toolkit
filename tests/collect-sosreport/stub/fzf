@@ -1,0 +1,19 @@
+#!/bin/bash
+# Stub fzf: memilih baris stdin yang cocok dengan salah satu pola ERE di
+# STUB_FZF_SELECT (dipisah ';'). Tanpa pola => exit 130 (Esc).
+mapfile -t lines
+printf '%s\n' "${lines[@]}" > "${STUB_STATE:?}/fzf.in"
+printf 'fzf\t-\t%s\n' "$*" >> "$STUB_STATE/calls.log"
+[[ -n "${STUB_FZF_SELECT:-}" ]] || exit 130
+IFS=';' read -ra pats <<< "$STUB_FZF_SELECT"
+n=0
+for l in "${lines[@]}"; do
+    for p in "${pats[@]}"; do
+        if [[ "$l" =~ $p ]]; then
+            printf '%s\n' "$l"
+            n=$(( n + 1 ))
+            break
+        fi
+    done
+done
+(( n > 0 )) || exit 1

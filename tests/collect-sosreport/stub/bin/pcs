@@ -1,0 +1,61 @@
+#!/bin/bash
+# Stub pcs (dijalankan lewat stub ssh). State cluster bersama di
+# $STUB_STATE/cluster: stonith (true|false|unset), format (colon|equals),
+# status-nodes, status. Kegagalan per host lewat PCS_* di env host.
+S="${STUB_STATE:?}"
+C="$S/cluster"
+printf 'pcs\t%s\t%s\n' "${STUB_HOST:-local}" "$*" >> "$S/calls.log"
+
+if [[ "${PCS_FAIL:-0}" == 1 ]]; then
+    echo "Error: unable to get cib: Could not connect to cluster (is it running?)" >&2
+    exit 1
+fi
+
+props() {
+    local v fmt
+    v="$(cat "$C/stonith")"
+    fmt="$(cat "$C/format" 2>/dev/null || echo colon)"
+    if [[ "$fmt" == "equals" ]]; then
+        echo "Cluster Properties: cib-bootstrap-options"
+        [[ "$v" != unset ]] && echo "  stonith-enabled=$v"
+    else
+        echo "Cluster Properties:"
+        [[ "$v" != unset ]] && echo " stonith-enabled: $v"
+    fi
+    return 0
+}
+
+case "$*" in
+    "status nodes") cat "$C/status-nodes" ;;
+    "status")       cat "$C/status" ;;
+    "property config stonith-enabled")
+        if [[ "${PCS_NO_PROPCONFIG:-0}" == 1 ]]; then
+            echo "Error: Unknown command 'config'" >&2
+            exit 1
+        fi
+        props ;;
+    "config")
+        echo "Cluster Name: tripleo_cluster"
+        echo "Corosync Nodes:"
+        echo " overcloud-controller-0 overcloud-controller-1 overcloud-controller-2"
+        echo
+        props | sed '1a\ cluster-infrastructure: corosync' ;;
+    "property set stonith-enabled=false")
+        [[ "${PCS_DISABLE_FAIL:-0}" == 1 ]] && { echo "Error: unable to set property" >&2; exit 1; }
+        [[ "${PCS_SET_NOOP:-0}" == 1 ]] && exit 0
+        echo false > "$C/stonith" ;;
+    "property set stonith-enabled=true")
+        (( ${PCS_ENABLE_SLEEP:-0} > 0 )) && sleep "$PCS_ENABLE_SLEEP"
+        [[ "${PCS_ENABLE_FAIL:-0}" == 1 ]] && { echo "Error: unable to set property" >&2; exit 1; }
+        echo true > "$C/stonith" ;;
+    "property unset stonith-enabled")
+        (( ${PCS_ENABLE_SLEEP:-0} > 0 )) && sleep "$PCS_ENABLE_SLEEP"
+        if [[ "${PCS_UNSET_FAIL:-0}" == 1 || "${PCS_ENABLE_FAIL:-0}" == 1 ]]; then
+            echo "Error: unable to unset property" >&2
+            exit 1
+        fi
+        echo unset > "$C/stonith" ;;
+    *)
+        echo "Error: stub pcs: perintah tidak dikenal: $*" >&2
+        exit 1 ;;
+esac

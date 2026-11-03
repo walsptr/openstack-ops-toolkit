@@ -74,6 +74,7 @@ Optional:
 |---|---|
 | python-cinderclient (`cinder`) | *Import Volume from NetApp* script |
 | `qemu-img` (qemu-img / qemu-utils) | *Upload Image*: virtual size (default `--min-disk`) and optional conversion to raw. Without it both are skipped |
+| `ansible-inventory`, `ssh`, `scp`, `ssh-keygen` | *Collect sosreport* (RHOSP undercloud only; present on a director/undercloud node) |
 | `curl` | *Collect Public Floating IPs*, *List Instances by Host*, and *IP Information*: `--method api` (one API request per page, through `lib/api.sh`). Without it `auto` falls back to `cli` |
 | [bat](https://github.com/sharkdp/bat) | Syntax highlighting in the preview pane |
 | `less` (or `$PAGER`) | Full source viewer (`Ctrl-E`) and help |
@@ -174,7 +175,7 @@ Press `?` inside the TUI for the full list.
 |---|---|
 | *type* | Search scripts — name, category, description, tags (fuzzy; prefix with `'` for an exact match) |
 | `↑` / `↓` | Move selection |
-| `Enter` | Run the selected script (asks for confirmation first if `MUTATES` is `yes`) |
+| `Enter` | Run the selected script (asks for confirmation first if `MUTATES` is `yes`; a script marked `(<platform> only)` is not run, see `@platform`) |
 | `Ctrl-E` | View the full script source in the pager |
 | `Ctrl-R` | Re-discover scripts (and re-read `scripts.env`) |
 | `Ctrl-O` | Switch OpenStack RC file (context) |
@@ -194,6 +195,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Upload Image | images | `images/upload-img.sh` | yes | Upload an image to Glance with progress, sharing, and checksum verification |
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | IP Information | network | `network/get-ip-info.sh` | no | Find who uses an IP: floating IPs and port fixed IPs (single IP or list) |
+| Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | List Instances by Host | servers | `servers/list-instances-by-host.sh` | no | Export instances on selected compute hosts to CSV (for maintenance notice) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -663,6 +665,118 @@ There is no compatibility shim at the old path:
   itself is not changed. Without an update, such an entry shows `⚠️ script tidak ditemukan`;
 - old logs stay in `log/network/get-float-ip-info-*.log`; new runs log to `get-ip-info-*.log`.
 
+### Collect sosreport (`rhosp/collect-sosreport.sh`)
+
+Collects `sosreport` from selected **Red Hat OpenStack Platform 17.1** nodes and copies the
+archives to the undercloud. Modifies resources: **yes** — the cluster property `stonith-enabled`
+(temporarily, only when needed). Run it **on the undercloud as user `stack`**; overcloud nodes are
+reached over SSH as the inventory user (`ansible_ssh_user`, default `tripleo-admin`, key
+`~/.ssh/id_rsa`). It does not use the OpenStack API (the launcher still asks for an RC file at
+start — `~/stackrc` works). Marked `@platform: rhosp`: on a host without `/etc/rhosp-release` the TUI
+shows it as `Collect sosreport (rhosp only)` and does not run it; the script checks again itself.
+
+```bash
+# From the TUI: no arguments — nodes are picked in a picker (fzf multi-select or numbered menu)
+# with entries such as "[semua Controller]", "[semua ComputeInstanceHA]" and "Undercloud (lokal)".
+rhosp/collect-sosreport.sh
+
+# Directly
+rhosp/collect-sosreport.sh --node overcloud-controller-0 --node overcloud-computeiha-1
+rhosp/collect-sosreport.sh --role Controller --include-undercloud --case-id 04123456
+rhosp/collect-sosreport.sh --role ComputeInstanceHA --parallel 2 --dest /var/tmp/sos --keep-remote
+rhosp/collect-sosreport.sh --role Controller --dry-run
+```
+
+| Option | Description |
+|---|---|
+| `--inventory PATH` | Inventory file (skips the search below) |
+| `--node HOST`, `--role ROLE` | Target nodes (repeatable, case-insensitive). Unknown names are skipped with a message |
+| `--include-undercloud` | Also collect from the undercloud (run locally) |
+| `--case-id ID` | Adds `--case-id ID` to the sosreport command |
+| `--dest DIR` | Destination directory on the undercloud (default `/tmp`; must already exist) |
+| `--parallel N` | Nodes collected at the same time (default 1, to keep load on cluster nodes low) |
+| `--timeout MIN` | sosreport time limit per node (default 60) |
+| `--keep-remote` | Do not offer to delete the sosreport files on the nodes |
+| `--dry-run` | Steps up to reading the fencing value, then the plan; no change, no sosreport, no copy, no lock, no state file |
+
+**Inventory** — searched in this order: `--inventory`, `/home/stack/inventory.yaml`, then
+`/home/stack/overcloud-deploy/*/tripleo-ansible-inventory.yaml` (with more than one stack, the stack
+is chosen by name). It is read with `ansible-inventory -i <file> --list` and `jq`. Overcloud hosts
+are the members of `allovercloud`; the role is the hostvar `tripleo_role_name`; the undercloud is
+recognised by the group name `Undercloud` (its `ansible_ssh_private_key_file` does not apply to
+overcloud nodes). Only hostname, role, `ansible_host`, user, key path, port, and
+`canonical_hostname` are taken from hostvars — the inventory (which contains secrets such as
+`overcloud_admin_password`) is never printed or logged.
+
+**SSH** — `BatchMode=yes`, `ConnectTimeout=10`, `ServerAliveInterval=15`. Hosts whose key is
+already in `known_hosts` use `StrictHostKeyChecking=yes`; unknown hosts are listed once and, after
+one confirmation, use `accept-new` (fingerprint logged). A changed host key is never overwritten:
+the node is `SKIPPED (host key mismatch)`.
+
+**Pre-check** (one SSH call per node): `/etc/rhosp-release` (a different version than the
+undercloud is a warning), `rpm -q sos`, `sosreport` present, passwordless `sudo`, free space in
+`/var/tmp` (< 5 GiB: asked per node, < 1 GiB: `SKIPPED (insufficient disk)`), and the node clock
+(start time for the file search). Free space in `--dest` below 2 GiB per node is a warning.
+
+**Command on every node** (wrapped in `timeout`):
+
+```
+sudo sosreport --batch --all-logs --threads=1 [--case-id ID]
+```
+
+**When fencing is disabled** — only when a selected node is a member of the Pacemaker cluster:
+a Pacemaker node (controller) or a **Pacemaker remote node, which with Instance HA means every
+`ComputeInstanceHA` compute**. Membership comes from `sudo pcs status nodes` on the first reachable
+controller (inventory group `pacemaker`); names are matched against the inventory hostname,
+`canonical_hostname`, and `ansible_host` (short names, case-insensitive), so guest bundles such as
+`galera-bundle-0` are not counted. Offline nodes and failed resource actions are shown, and an
+unhealthy cluster needs a confirmation. If no controller can run `pcs`, cluster nodes are
+`SKIPPED (cluster status unknown)` and the others still run.
+
+- `stonith-enabled` is read with `sudo pcs property config stonith-enabled` (fallback `pcs config`);
+  no `stonith-enabled` line means *unset* (Pacemaker default: true).
+- `false` already: fencing is **not touched and never turned on by the script**; a prominent
+  warning says so (with Instance HA, VMs of a failed compute are not evacuated while fencing is
+  off) and shows `sudo pcs property set stonith-enabled=true` in case it is not intentional.
+- `true` / unset: after the impact is shown and you type `yes`, a state file is written, then
+  `sudo pcs property set stonith-enabled=false` is run and verified. If it is not `false`, no
+  sosreport runs on cluster nodes.
+- **Impact on Instance HA**: while fencing is disabled, a failed compute is not fenced and its VMs
+  are **not evacuated** automatically. To keep that window short, cluster members are collected
+  first and fencing is restored **right after their sosreports finish** — before the copies and
+  before the non-cluster nodes and the undercloud.
+
+**Restore and state file** — fencing is restored to its **original** value (`true` →
+`set stonith-enabled=true`; unset → `pcs property unset stonith-enabled`, fallback `set true`),
+verified, then the state file is deleted. The restore also runs on error, `Ctrl-C`, `SIGTERM`, and
+`SIGHUP` (a second `Ctrl-C` does not cut it short); if a controller fails, the next one is tried. If
+all fail, a large warning with the manual command is shown, the state file is kept, and the exit
+code is 2. The state file `log/rhosp/collect-sosreport-fencing.state` (run id, controller, original
+value, time) covers what a trap cannot (`kill -9`, power loss): the next run shows a prominent warning
+and offers `r` (restore now to the recorded value), `s` (continue; if this run disables fencing, the
+recorded value is restored at the end), or `q` (quit). If fencing is already back on, the state
+file is removed. A lock (`log/rhosp/collect-sosreport.lock`) prevents two runs from changing fencing
+at the same time; run it inside `tmux`/`screen`.
+
+**Results** — archive location is parsed from the sosreport output (fallback: the newest
+`/var/tmp/sosreport-*.tar.xz` newer than the node's pre-check time). On the node the archive and its
+`.sha256` are `chown`ed to the SSH user, copied with `scp` to `--dest` with permission `600` (a name
+that already exists is never overwritten: the copy gets a `-<run_id>` suffix), and the SHA-256 is
+verified (`FAILED (checksum mismatch)` keeps the file on the node). Afterwards one question offers to
+delete the copied files from the nodes (`rm` without `sudo`). **`/tmp` is the default destination:
+its content can be removed automatically (systemd-tmpfiles) and is lost on reboot when it is a
+tmpfs — move the archives to a safe place**, or use `--dest`. The archives contain configuration and
+sensitive data.
+
+Report: `log/rhosp/collect-sosreport-<run_id>-results.tsv` (`600`) with timestamp, hostname, role,
+ip, rhosp_release, result, remote_file, local_file, size_bytes, sha256, duration_s, message. The log
+has `RESULT action=disable-fencing` / `action=enable-fencing` (resource = cluster name) and
+`action=sos-report` per node.
+
+Environment (mainly for tests): `OSOPS_SSH`, `OSOPS_SCP`, `OSOPS_ANSIBLE_INVENTORY`, `OSOPS_FZF`,
+`OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`, `OSOPS_SOS_LOCAL_DIR`, `OSOPS_SOS_MIN_FREE_GB` (5),
+`OSOPS_SOS_MIN_FREE_HARD_GB` (1), `OSOPS_SOS_DEST_GB_PER_NODE` (2), `OSOPS_SOS_PROGRESS_INTERVAL` (10).
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -777,6 +891,7 @@ in the source line.
 | `@mutates` | No | `yes` / `no` (default `no`). Use `yes` for any script that changes resources — the launcher then asks for confirmation. The script must still ask for its own confirmation. |
 | `@requires` | No | Free text, e.g. `admin`, `admin, cinder`. |
 | `@tags` | No | Comma-separated keywords, included in search. |
+| `@platform` | No | Environment the script is made for. Supported: `rhosp` (met when `/etc/rhosp-release` exists). When not met, the script is still listed, marked `(<platform> only)` in the table and menu, the preview shows `Platform : <platform> — tidak terpenuhi`, and `Enter` shows a message instead of running it (`RUN_BLOCKED` in `toolkit.log`). An unknown value counts as not met (fail safe). It is only a marker — the script must check its environment itself. `--list` is not affected. To hide such a script on a host, use `!path` in `scripts.env`. |
 
 Rules:
 
@@ -790,6 +905,9 @@ Rules:
 - Read prompts from `/dev/tty`. When a loop over an input file asks questions, read the whole file
   first (`mapfile`) — never `while read ... < file`, or the prompts consume the file.
 - The script inherits the OpenStack credentials (`OS_*` variables) loaded by the toolkit.
+- A temporary change of cluster configuration (e.g. `stonith-enabled`) must record the original
+  value, restore exactly that value (not an assumed one) through `LOG_EXIT_HOOK`, and keep a state
+  file so a later run can restore it after a crash (see *Collect sosreport*).
 
 Then:
 
@@ -831,6 +949,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── identity/               # Identity (Keystone) scripts
 ├── images/                 # Image (Glance) scripts
 ├── network/                # Network (Neutron) scripts
+├── rhosp/                  # Red Hat OpenStack Platform (director/undercloud) scripts
 ├── servers/                # Server (Nova) scripts
 └── volumes/                # Block storage (Cinder) scripts
 ```
@@ -840,7 +959,9 @@ Category directories are discovered dynamically; add a directory to add a catego
 Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-img.sh`,
 `network/collect-public-fip.sh`, `servers/list-instances-by-host.sh` and `network/get-ip-info.sh` run
 against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no cloud needed; requires `tmux`, `jq`,
-`flock`; `fzf` for the picker tests; the `get-ip-info` installer test uses `unshare -r`):
+`flock`; `fzf` for the picker tests; the `get-ip-info` installer test uses `unshare -r`).
+`rhosp/collect-sosreport.sh` runs against stub `ssh`/`scp`/`ansible-inventory`/`sudo`/`sosreport`/`pcs`/`fzf`
+and an inventory fixture (needs `ssh-keygen`):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
@@ -850,6 +971,7 @@ bash tests/upload-img/run.sh
 bash tests/collect-public-fip/run.sh
 bash tests/list-instances-by-host/run.sh
 bash tests/get-ip-info/run.sh
+bash tests/collect-sosreport/run.sh
 ```
 
 ## Troubleshooting
@@ -870,4 +992,8 @@ bash tests/get-ip-info/run.sh
 | `Cloud hanya mendukung compute microversion ... (< 2.30)` | Live migration to a chosen host needs compute API ≥ 2.30 |
 | `Sumber URL butuh import method web-download, tidak tersedia di region ...` | The active region's Glance does not offer `web-download`: download the file and use `--file` |
 | `Upload ditolak karena ada lebih dari satu image bernama ...` | The OpenStack client refuses an upload when more than one visible image has that name: use another name, or rename/hide the old images (rotation) |
+| `collect-sosreport lain sedang berjalan` | Another run holds `log/rhosp/collect-sosreport.lock` (the holder is shown). Wait for it — two runs could overwrite each other's fencing state |
+| `FENCING MUNGKIN MASIH DI-DISABLE OLEH EKSEKUSI SEBELUMNYA` | A previous *Collect sosreport* run stopped before restoring `stonith-enabled` (state file `log/rhosp/collect-sosreport-fencing.state`). Choose `r` to restore the recorded value, or restore manually with the command shown |
+| `FENCING BELUM DIPULIHKAN!` | No controller could restore `stonith-enabled`. Run the command shown on a controller and check with `sudo pcs property config stonith-enabled`; delete the state file afterwards (or let the next run detect it) |
+| A script is shown as `(rhosp only)` | Its `@platform` is not met on this host (`/etc/rhosp-release` missing). Run the toolkit on the undercloud, or hide it with `!path` in `scripts.env` |
 | `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |
