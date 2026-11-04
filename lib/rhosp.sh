@@ -43,7 +43,8 @@
 #   ssh_node IDX TIMEOUT CMD       stdin dari /dev/null
 #   ssh_node_stdin IDX TIMEOUT CMD stdin dari pemanggil (pola search, atau FIFO
 #                                  yang ditahan terbuka untuk stream follow);
-#                                  TIMEOUT 0 = tanpa timeout lokal
+#                                  TIMEOUT 0 = tanpa timeout lokal; LogLevel=ERROR
+#                                  (tanpa banner sshd di output)
 #   scp_fetch IDX SRC DST TIMEOUT
 #   ssh_fail_reason STDERR RC      alasan SKIPPED (host key mismatch, auth, ...)
 #   log_accepted_key IDX           catat fingerprint host key yang baru diterima
@@ -629,9 +630,12 @@ ssh_node() {
 # (pola pencarian, daftar file) dan untuk stream follow (stdin = FIFO yang
 # ditahan terbuka: saat ssh berhenti, perintah remote menerima EOF).
 # TIMEOUT 0 = tanpa timeout lokal (ssh tetap di process group pemanggil).
+# LogLevel=ERROR: banner sshd dan "Permanently added" tidak masuk stream
+# (error koneksi/auth/host key tetap tampil).
 ssh_node_stdin() {
     local i="$1" t="$2" cmd="$3"
     build_ssh_opts "$i" -p
+    SSH_OPTS+=(-o LogLevel=ERROR)
     if (( t > 0 )); then
         timeout --kill-after=10 "$t" \
             "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@${N_IP[$i]}" "$cmd"

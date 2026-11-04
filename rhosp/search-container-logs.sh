@@ -334,6 +334,10 @@ prepare_nodes() {
 # user SSH tidak bisa masuk /var/log/containers tanpa sudo). xargs -0 membagi
 # daftar file panjang sesuai batas argumen. Semua nilai di string ini
 # konstanta/angka tervalidasi.
+# Dua lapis timeout: yang luar (user SSH) menghentikan sh/xargs, yang dalam
+# berjalan lewat sudo karena grep/zgrep milik root tidak bisa disinyal oleh
+# user biasa (dan sudo tidak meneruskan sinyal dari process group yang sama).
+# Batas waktu terburuk per node: sekitar 2 x --timeout.
 build_remote_cmd() {
     local opts="-H -n" inner
     if (( REGEX )); then opts+=" -E"; else opts+=" -F"; fi
@@ -341,11 +345,14 @@ build_remote_cmd() {
     opts+=" --max-count=$MAX_PER_FILE"
     (( CONTEXT > 0 )) && opts+=" --context=$CONTEXT"
     # shellcheck disable=SC2016  # dievaluasi di node
-    inner='IFS= read -r pl || pl=""; IFS= read -r gz || gz=""; st=0; '
+    inner='IFS= read -r pl || pl=""; IFS= read -r gz || gz=""; st=0; s0=$(date +%s); '
     # shellcheck disable=SC2016
-    inner+='if [ -n "$pl" ]; then printf "'"$CL_ROOT"'/%s\0" $pl | xargs -0 -r sudo -n grep '"$opts"' -e "$1" --; r=$?; [ "$r" -gt "$st" ] && st=$r; fi; '
+    inner+='if [ -n "$pl" ]; then printf "'"$CL_ROOT"'/%s\0" $pl | xargs -0 -r sudo -n timeout -k 5 '"$TIMEOUT_S"' grep '"$opts"' -e "$1" --; r=$?; [ "$r" -gt "$st" ] && st=$r; fi; '
     # shellcheck disable=SC2016
-    inner+='if [ -n "$gz" ]; then printf "'"$CL_ROOT"'/%s\0" $gz | xargs -0 -r sudo -n zgrep '"$opts"' -e "$1" --; r=$?; [ "$r" -gt "$st" ] && st=$r; fi; '
+    inner+='if [ -n "$gz" ]; then printf "'"$CL_ROOT"'/%s\0" $gz | xargs -0 -r sudo -n timeout -k 5 '"$TIMEOUT_S"' zgrep '"$opts"' -e "$1" --; r=$?; [ "$r" -gt "$st" ] && st=$r; fi; '
+    # Timeout lapis dalam terjadi => xargs mengembalikan 123: kenali dari waktu
+    # shellcheck disable=SC2016
+    inner+='[ $(( $(date +%s) - s0 )) -ge '"$TIMEOUT_S"' ] && exit 124; '
     # shellcheck disable=SC2016
     inner+='exit "$st"'
     # shellcheck disable=SC2016
@@ -570,6 +577,8 @@ summary_text() {
         echo
         echo "TIDAK ADA KECOCOKAN untuk \"$KEYWORD\" di $(scope_text) pada $(wc -w <<< "${done_nodes//,/ }") node ($done_nodes)."
         [[ -n "$not_done" ]] && echo "Catatan: pencarian di $not_done tidak selesai (lihat TIMEOUT/GAGAL di atas)."
+    elif [[ -n "$not_done" ]]; then
+        echo "Total: $total kecocokan (SEBAGIAN: pencarian di $not_done tidak selesai)."
     else
         echo "Total: $total kecocokan."
     fi

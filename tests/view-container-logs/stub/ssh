@@ -18,10 +18,15 @@ set -o nounset
 S="${STUB_STATE:?STUB_STATE belum diset}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 shk=""
+loglevel=""
 
 while (( $# > 0 )); do
     case "$1" in
-        -o) [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"; shift 2 ;;
+        -o)
+            [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"
+            [[ "$2" == LogLevel=* ]] && loglevel="${2#*=}"
+            shift 2
+            ;;
         -i) shift 2 ;;
         -p)
             if [[ ! "$2" =~ ^[0-9]+$ ]]; then
@@ -75,7 +80,8 @@ if ! ssh-keygen -F "$host" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
         exit 255
     fi
 fi
-if [[ "$BANNER" == 1 ]]; then
+# Seperti ssh: banner hanya tampil jika LogLevel >= INFO
+if [[ "$BANNER" == 1 && ! "${loglevel^^}" =~ ^(QUIET|FATAL|ERROR)$ ]]; then
     printf '%s\n' '********************************************************************' \
         '*  This system is for the use of authorized users only.            *' \
         '********************************************************************' >&2

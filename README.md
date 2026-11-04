@@ -883,7 +883,12 @@ rhosp/search-container-logs.sh --role Controller --log nova/nova-api.log --log n
 | `--save` | Save the result (see below) |
 
 - **Remote command** — one SSH per node, all nodes in parallel. It runs as
-  `nice -n 19 ionice -c3 timeout <SEC> sh -c '... xargs -0 sudo -n grep|zgrep -H -n -F|-E [-i] --max-count=N [--context=N] -e "$1" --'`.
+  `nice -n 19 ionice -c3 timeout <SEC> sh -c '... xargs -0 sudo -n timeout -k 5 <SEC> grep|zgrep -H -n -F|-E [-i] --max-count=N [--context=N] -e "$1" --'`.
+  The second `timeout` runs through `sudo` because `grep`/`zgrep` run as root, and the SSH user
+  cannot signal them (sudo does not relay signals from its own process group). Without it, a
+  timed-out search kept reading on the node (seen on RHOSP 17.1.13). Worst case per node is
+  about 2 × `--timeout`. A node that timed out keeps its partial matches, and the total is
+  marked `SEBAGIAN`.
   **The keyword and the file list are never part of the command string.** They are sent on the
   ssh stdin: line 1 is the keyword, lines 2–3 are the plain and `.gz` file lists. `xargs -0`
   splits long lists (e.g. `--all-logs`) to stay below the argument length limit. `-e` keeps a

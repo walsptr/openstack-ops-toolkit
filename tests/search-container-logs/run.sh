@@ -21,6 +21,7 @@ SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/rhosp/search-contain
 source "$(dirname "${BASH_SOURCE[0]}")/../view-container-logs/common.sh"
 
 NOVA="$C0"
+TIMEOUT_DUR=0
 
 test_keyword_required() {
     local rc
@@ -132,7 +133,8 @@ test_rotated() {
     expect_match "catatan file kompresi lain dilewati" "$PLAIN_OUT" 'File terkompresi dilewati \(bukan .gz'
     expect_match "daftar file yang dilewati" "$PLAIN_OUT" 'overcloud-controller-0: 3 file \(.*nova-api.log-20261101.xz'
     expect_no_match "rotasi file lain tidak ikut" "$PLAIN_OUT" 'neutron/server.log.1'
-    expect_match "zgrep hanya untuk .gz" "$(calls | grep "^sudo	$C0	zgrep")" 'nova/nova-api.log.2.gz$'
+    expect_match "zgrep hanya untuk .gz" "$(calls | grep "^sudo	$C0	timeout .* zgrep")" 'nova/nova-api.log.2.gz'
+    expect_no_match "zgrep tidak menerima file non-.gz" "$(calls | grep "^sudo	$C0	timeout .* zgrep")" 'nova-api.log.1( |$)'
     expect_no_match "xz tidak diberikan ke grep" "$(calls | grep '^sudo' | grep -E 'grep')" '\.xz|\.bz2|\.zst'
 
     # File aktif 0 byte setelah rotasi (seperti di environment nyata): isi ada di .1
@@ -170,7 +172,7 @@ test_long_file_list() {
     expect_match "file terakhir dari 9000+ ikut dicari" "$PLAIN_OUT" "$long-8999.log:1\\] NEEDLE-IN-MANY"
     expect_no_match "tidak ada 'Argument list too long'" "$PLAIN_OUT" 'Argument list too long'
     expect_true "daftar file > ARG_MAX dibagi xargs (>1 panggilan grep)" \
-        test "$(calls | grep -c "^sudo	$NOVA	grep")" -gt 1
+        test "$(calls | grep -c "^sudo	$NOVA	timeout -k 5 [0-9]* grep")" -gt 1
     expect_true "string perintah ssh tetap pendek (< 2000 karakter)" \
         test "$(calls | grep '^ssh' | tail -n 1 | wc -c)" -lt 2000
 }
@@ -179,16 +181,22 @@ test_timeout_fail_nomatch() {
     begin "timeout_fail"
     host_env "$C1" SLOW_GREP=30
     host_env "$C2" SUDO_FAIL_GREP=1 BANNER=1
+    local t0
+    t0="$(date +%s)"
     run_plain "OSOPS_CL_PROGRESS_INTERVAL=1" --role Controller --log nova/nova-api.log --keyword "$REQ_SHARED" --timeout 2
+    TIMEOUT_DUR=$(( $(date +%s) - t0 ))
     expect_eq "exit code 0" "$PLAIN_RC" "0"
     expect_match "progres: mencari" "$PLAIN_OUT" '🔎 overcloud-controller-1: mencari \(1 file'
     expect_match "progres: selesai" "$PLAIN_OUT" '✅ overcloud-controller-0: selesai \(1 kecocokan'
     expect_match "progres: timeout" "$PLAIN_OUT" 'overcloud-controller-1: timeout setelah 2s'
     expect_match "progres: gagal" "$PLAIN_OUT" '❌ overcloud-controller-2: gagal \(sudo failed'
     expect_match "ringkasan: TIMEOUT" "$PLAIN_OUT" 'overcloud-controller-1 +TIMEOUT +timeout setelah 2s'
+    expect_match "total sebagian ditandai" "$PLAIN_OUT" 'Total: 1 kecocokan \(SEBAGIAN: pencarian di overcloud-controller-1,overcloud-controller-2 tidak selesai\)'
     expect_match "ringkasan: GAGAL + alasan" "$PLAIN_OUT" 'overcloud-controller-2 +GAGAL +sudo failed'
     expect_no_match "banner sshd tidak masuk pesan gagal" "$PLAIN_OUT" 'GAGAL .*\*\*\*|gagal \(.*\*\*\*'
     expect_match "perintah memakai timeout remote" "$(calls | grep '^ssh' | tail -n 1)" 'timeout -k 10 2 sh -c'
+    expect_match "grep root dibungkus timeout lewat sudo" "$(calls | grep '^ssh' | tail -n 1)" 'sudo -n timeout -k 5 2 grep '
+    expect_true "timeout node tetap dekat --timeout (< 12 dtk)" test "$TIMEOUT_DUR" -lt 12
     expect_match "log status timeout" "$(log_text)" 'RESULT resource=overcloud-controller-1 action=lookup mode=search result=FAILED status=TIMEOUT'
     expect_match "log status gagal" "$(log_text)" 'RESULT resource=overcloud-controller-2 action=lookup mode=search result=FAILED status=GAGAL'
     sleep 1
@@ -243,7 +251,9 @@ test_nice_allowlist() {
     run_plain "" --role Controller --role ComputeInstanceHA --all-logs --include-rotated --keyword "$REQ_SHARED"
     expect_match "nice -n 19 + ionice -c3 + timeout" "$(calls | grep '^ssh' | tail -n 1)" 'exec nice -n 19 ionice -c3 timeout -k 10 300 sh -c'
     expect_eq "satu ssh pencarian per node" "$(calls | grep '^ssh' | grep -c 'ionice')" "6"
-    check_allowlist 'find|grep|zgrep' 'nice|ionice|timeout|sh|xargs|read|then|exit|if|st|exec|pl|gz'
+    check_allowlist 'find|timeout' 'nice|ionice|timeout|sh|xargs|read|then|exit|if|st|exec|pl|gz|s0'
+    expect_eq "sudo timeout hanya membungkus grep/zgrep" \
+        "$(awk -F '\t' '$1 == "sudo" && $3 ~ /^timeout / { split($3, a, " "); print a[5] }' "$WORK/state/calls.log" | sort -u | grep -vE '^(grep|zgrep)$' || true)" ""
     check_no_secrets
     expect_no_match "isi log tidak masuk log toolkit" "$(log_text)" 'ROTATED-|shared request on|neutron sees'
     expect_match "log DISCOVERY per node" "$(log_text)" 'DISCOVERY host=overcloud-computeiha-2 ip=192.168.24.26 result=OK active=6 rotated=1'

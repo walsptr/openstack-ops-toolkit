@@ -2,6 +2,8 @@
 # Stub sudo di "node": catat perintah (allowlist dicek oleh tes), petakan
 # /var/log/containers ke direktori palsu host di argumen, jalankan, dan
 # kembalikan path di output/stderr ke /var/log/containers.
+# "sudo timeout ... grep|zgrep ...": SLOW_GREP dijalankan DI DALAM timeout
+# (seperti grep lambat sungguhan yang dihentikan oleh timeout milik root).
 S="${STUB_STATE:?}"
 [[ "${1:-}" == "-n" ]] && shift
 printf 'sudo\t%s\t%s\n' "${STUB_HOST:-?}" "$*" >> "$S/calls.log"
@@ -11,17 +13,21 @@ if [[ "${SUDO_FAIL:-0}" == 1 ]]; then
 fi
 hd="$S/hosts/${STUB_HOST:-x}/containers"
 args=()
+cmd=""
 for a in "$@"; do
-    args+=("${a//\/var\/log\/containers/$hd}")
-done
-case "${1:-}" in
-    grep|zgrep)
+    a="${a//\/var\/log\/containers/$hd}"
+    if [[ -z "$cmd" && ( "$a" == grep || "$a" == zgrep ) ]]; then
+        cmd="$a"
         if [[ "${SUDO_FAIL_GREP:-0}" == 1 ]]; then
             echo "sudo: a password is required" >&2
             exit 1
         fi
-        [[ "${SLOW_GREP:-0}" != 0 ]] && sleep "$SLOW_GREP"
-        ;;
-esac
+        if [[ "${SLOW_GREP:-0}" != 0 ]]; then
+            # shellcheck disable=SC2016
+            args+=(sh -c 'sleep "$0"; exec "$@"' "$SLOW_GREP")
+        fi
+    fi
+    args+=("$a")
+done
 "${args[@]}" 2> >(sed -u "s#$hd#/var/log/containers#g" >&2) | sed -u "s#$hd#/var/log/containers#g"
 exit "${PIPESTATUS[0]}"

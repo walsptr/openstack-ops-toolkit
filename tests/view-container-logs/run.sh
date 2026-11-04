@@ -160,12 +160,15 @@ test_tail_menu_save() {
 test_follow() {
     local rc i n
     begin "follow"
+    host_env "$C0" BANNER=1
+    host_env "$C1" BANNER=1
     run_tmux "STUB_FZF_1='^(nova/nova-api.log|neutron/server.log)	'" --role Controller --mode follow
     wait_for 'Tekan Ctrl-C untuk berhenti' 1 30 || return 0
     wait_for '\[overcloud-controller-2 nova/nova-api.log\] .*shared request' 1 20 || return 0
     expect_match "10 baris awal per file" "$(screen_text)" '\[overcloud-controller-1 nova/nova-api.log\] .*baris 12'
     expect_no_match "tidak lebih dari 10 baris awal" "$(screen_text)" '\[overcloud-controller-1 nova/nova-api.log\] .*baris 11$'
     expect_match "prefix per node dan file" "$(screen_text)" '\[overcloud-controller-0 neutron/server.log\] .*neutron sees it'
+    expect_no_match "banner sshd tidak masuk stream follow" "$(screen_text)" 'authorized users only'
     expect_eq "satu ssh per node (bukan per file)" "$(calls | grep '^ssh' | grep -c 'tail -F')" "3"
     expect_match "tail --pid + EOF stdin" "$(calls | grep 'tail -F' | head -n 1)" 'sudo -n tail -F -v -n 10 --pid=\$\$ -- /var/log/containers/neutron/server.log /var/log/containers/nova/nova-api.log & cat >/dev/null'
     echo "LIVE-LINE-FROM-C1" >> "$WORK/state/hosts/$C1/containers/neutron/server.log"
