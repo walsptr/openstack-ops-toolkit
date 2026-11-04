@@ -1,0 +1,9 @@
+# Struktur contoh /var/log/containers di compute RHOSP 17.1 (path relatif),
+# diverifikasi terhadap environment dev (RHOSP 17.1.13); hanya sebagian file.
+libvirt/qemu/instance-0000005f.log
+libvirt/virtqemud.log
+neutron/ovn-metadata-agent.log
+nova/nova-compute.log
++nova/nova-compute.log.1
+openvswitch/ovn-controller.log
+stdouts/nova_compute.log

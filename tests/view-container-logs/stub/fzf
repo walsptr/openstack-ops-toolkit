@@ -1,0 +1,35 @@
+#!/bin/bash
+# Stub fzf: panggilan ke-N memilih baris stdin yang cocok dengan salah satu
+# pola ERE di STUB_FZF_<N> (atau STUB_FZF_SELECT), dipisah ';'. Tanpa pola
+# => exit 130 (Esc). STUB_FZF_PREVIEW=1: jalankan perintah --preview untuk
+# baris terpilih pertama ({1} = field 1), output ke preview.out.
+S="${STUB_STATE:?}"
+mapfile -t lines
+n=$(( $(cat "$S/fzf.count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$S/fzf.count"
+printf '%s\n' "${lines[@]}" > "$S/fzf$n.in"
+printf 'fzf\t-\t%s\n' "$*" >> "$S/calls.log"
+preview=""
+for a in "$@"; do
+    [[ "$a" == --preview=* ]] && preview="${a#--preview=}"
+done
+var="STUB_FZF_$n"
+sel="${!var:-${STUB_FZF_SELECT:-}}"
+[[ -n "$sel" ]] || exit 130
+IFS=';' read -ra pats <<< "$sel"
+out=()
+for l in "${lines[@]}"; do
+    for p in "${pats[@]}"; do
+        if [[ "$l" =~ $p ]]; then
+            out+=("$l")
+            break
+        fi
+    done
+done
+(( ${#out[@]} > 0 )) || exit 1
+if [[ "${STUB_FZF_PREVIEW:-0}" == 1 && -n "$preview" ]]; then
+    key="${out[0]%%$'\t'*}"
+    printf -v q "'%s'" "$key"
+    bash -c "${preview//\{1\}/$q}" > "$S/preview$n.out" 2>&1
+fi
+printf '%s\n' "${out[@]}"

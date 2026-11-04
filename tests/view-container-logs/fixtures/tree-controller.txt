@@ -1,0 +1,47 @@
+# Struktur contoh /var/log/containers di controller RHOSP 17.1 (path relatif).
+# Diverifikasi terhadap environment dev (RHOSP 17.1.13): direktori per service,
+# httpd/<service>/ (termasuk error_log tanpa .log), stdouts/, rotasi .N dan
+# .N.gz (sampai .14.gz), file aktif 0 byte setelah rotasi (isi ada di .1),
+# file bernama UUID. Hanya sebagian file yang dimasukkan.
+# Baris "+" = file rotasi, " @<host>" = hanya ada di host itu,
+# " !empty" = file aktif 0 byte (baru dirotasi).
+# Kasus sintetis (TIDAK ditemukan di environment nyata, untuk menguji
+# klasifikasi): -YYYYMMDD, .xz, .bz2, .zst, dan "nova/bad name.log" (common.sh).
+cinder/cinder-api.log
+cinder/cinder-scheduler.log
+cinder/cinder-volume.log @overcloud-controller-0
+glance/api.log
+glance/api_internal.log
+haproxy/haproxy.log
+heat/heat-engine.log
+httpd/cinder-api/cinder_wsgi_access.log
+httpd/keystone/error_log
++httpd/keystone/error_log.1
++httpd/keystone/error_log.2.gz
+httpd/keystone/keystone_wsgi_access.log
+httpd/nova-api/nova_api_wsgi_access.log
++httpd/nova-api/nova_api_wsgi_access.log.1
+httpd/nova-api/nova_api_wsgi_error.log
+keystone/keystone.log
+mysql/mysqld.log
+neutron/server.log
++neutron/server.log.1
+nova/5f633eb0-0000-4000-8000-000000000001
+nova/nova-api.log
++nova/nova-api.log.1
++nova/nova-api.log.2.gz
++nova/nova-api.log.14.gz
++nova/nova-api.log-20261101.xz
++nova/nova-api.log-20261102.bz2
++nova/nova-api.log-20261103.zst
+nova/nova-conductor.log
+nova/nova-scheduler.log !empty
++nova/nova-scheduler.log.1
+placement/placement.log
+rabbitmq/log/crash.log
+rabbitmq/rabbit@overcloud-controller-0.log @overcloud-controller-0
+rabbitmq/startup_log
+stdouts/nova_api.log
++stdouts/nova_api.log.1
+stdouts/rabbitmq-bundle.log
+5f633eb0-0000-4000-8000-000000000002.log

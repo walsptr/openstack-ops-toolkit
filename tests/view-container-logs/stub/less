@@ -1,0 +1,4 @@
+#!/bin/bash
+# Stub pager: simpan isi yang ditampilkan (pager.out, ditambahkan per panggilan)
+S="${STUB_STATE:?}"
+{ echo "=== PAGER $* ==="; cat; } >> "$S/pager.out"

@@ -1,0 +1,4 @@
+# Placeholder: stub ansible-inventory membaca inventory-nested.yaml.json.
+# Struktur grup mengikuti /home/stack/inventory.yaml RHOSP 17.1.13 (diverifikasi
+# di environment dev, disamarkan): grup role/allovercloud/pacemaker berisi child
+# berprefiks nama stack (overcloud_Controller, overcloud_allovercloud, ...).

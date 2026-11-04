@@ -1,0 +1,27 @@
+#!/bin/bash
+# Stub sudo di "node": catat perintah (allowlist dicek oleh tes), petakan
+# /var/log/containers ke direktori palsu host di argumen, jalankan, dan
+# kembalikan path di output/stderr ke /var/log/containers.
+S="${STUB_STATE:?}"
+[[ "${1:-}" == "-n" ]] && shift
+printf 'sudo\t%s\t%s\n' "${STUB_HOST:-?}" "$*" >> "$S/calls.log"
+if [[ "${SUDO_FAIL:-0}" == 1 ]]; then
+    echo "sudo: a password is required" >&2
+    exit 1
+fi
+hd="$S/hosts/${STUB_HOST:-x}/containers"
+args=()
+for a in "$@"; do
+    args+=("${a//\/var\/log\/containers/$hd}")
+done
+case "${1:-}" in
+    grep|zgrep)
+        if [[ "${SUDO_FAIL_GREP:-0}" == 1 ]]; then
+            echo "sudo: a password is required" >&2
+            exit 1
+        fi
+        [[ "${SLOW_GREP:-0}" != 0 ]] && sleep "$SLOW_GREP"
+        ;;
+esac
+"${args[@]}" 2> >(sed -u "s#$hd#/var/log/containers#g" >&2) | sed -u "s#$hd#/var/log/containers#g"
+exit "${PIPESTATUS[0]}"

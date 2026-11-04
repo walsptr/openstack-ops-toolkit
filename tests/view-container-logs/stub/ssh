@@ -1,0 +1,120 @@
+#!/bin/bash
+# Stub ssh untuk tests/view-container-logs dan tests/search-container-logs.
+# Meniru sshd: perintah "remote" dijalankan apa adanya dengan bash, PATH berisi
+# stub sudo (bin/). Seperti di node sungguhan, /var/log/containers hanya bisa
+# dibaca lewat sudo: stub sudo yang memetakan path ke hosts/<ip>/containers;
+# akses tanpa sudo (mis. cd /var/log/containers) gagal.
+#
+# Proses remote DILEPAS (double fork + setsid), bukan anak stub: membunuh stub
+# (kill_tree di script, atau kill -9) tidak membunuh proses remote. Stdin
+# remote adalah FIFO yang ditulisi oleh stub; saat stub mati, FIFO tertutup
+# dan remote menerima EOF — sama seperti sshd menutup channel.
+#
+# Perilaku per host (hosts/<ip>/env): UNREACHABLE, HOSTKEY_CHANGED, AUTH_FAIL,
+# SUDO_FAIL (semua sudo), SUDO_FAIL_GREP (hanya grep/zgrep), SLOW_GREP=<detik>,
+# BANNER=1 (banner sshd di stderr setiap koneksi, seperti di environment nyata).
+set -o nounset
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shk=""
+
+while (( $# > 0 )); do
+    case "$1" in
+        -o) [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"; shift 2 ;;
+        -i) shift 2 ;;
+        -p)
+            if [[ ! "$2" =~ ^[0-9]+$ ]]; then
+                echo "Bad port '$2'" >&2
+                exit 255
+            fi
+            shift 2
+            ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+dest="$1"
+shift
+cmd="$*"
+host="${dest#*@}"
+hd="$S/hosts/$host"
+
+printf 'ssh\t%s\t%s\t%s\n' "$host" "$shk" "${cmd//$'\n'/ ; }" >> "$S/calls.log"
+
+if [[ ! -d "$hd" ]]; then
+    echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+    exit 255
+fi
+
+UNREACHABLE=0 HOSTKEY_CHANGED=0 AUTH_FAIL=0 BANNER=0
+export SUDO_FAIL=0 SUDO_FAIL_GREP=0 SLOW_GREP=0
+set -a
+# shellcheck disable=SC1091
+[[ -f "$hd/env" ]] && source "$hd/env"
+set +a
+
+if [[ "$UNREACHABLE" == 1 ]]; then
+    sleep 0.2
+    echo "ssh: connect to host $host port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$HOSTKEY_CHANGED" == 1 ]]; then
+    echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2
+    echo "Host key verification failed." >&2
+    exit 255
+fi
+if ! ssh-keygen -F "$host" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+    if [[ "$shk" == "accept-new" ]]; then
+        printf '%s %s\n' "$host" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
+        echo "Warning: Permanently added '$host' (ED25519) to the list of known hosts." >&2
+    else
+        echo "Host key verification failed." >&2
+        exit 255
+    fi
+fi
+if [[ "$BANNER" == 1 ]]; then
+    printf '%s\n' '********************************************************************' \
+        '*  This system is for the use of authorized users only.            *' \
+        '********************************************************************' >&2
+fi
+if [[ "$AUTH_FAIL" == 1 ]]; then
+    echo "tripleo-admin@$host: Permission denied (publickey)." >&2
+    exit 255
+fi
+
+mkdir -p "$hd/bin"
+ln -sfn "$HERE/bin/sudo" "$hd/bin/sudo"
+c="$cmd"
+
+tmp="$(mktemp -d "$S/ssh.XXXXXX")"
+mkfifo "$tmp/in"
+export STUB_HOST="$host"
+# Remote dilepas: parent-nya bukan stub ini
+# shellcheck disable=SC2016  # $1..$3 milik bash -c di dalam
+( PATH="$hd/bin:/usr/bin:/bin" setsid bash -c 'bash -c "$1" < "$2"; echo $? > "$3.tmp"; mv "$3.tmp" "$3"' \
+    remote "$c" "$tmp/in" "$tmp/rc" & ) < /dev/null
+exec 3> "$tmp/in"
+trap '' PIPE
+# Relay stdin => FIFO (builtin, di proses stub sendiri). Berhenti saat stdin
+# EOF, saat remote selesai, atau saat stub dibunuh.
+while true; do
+    line=""
+    if IFS= read -r -t 0.2 line; then
+        printf '%s\n' "$line" >&3 2>/dev/null || break
+    else
+        r=$?
+        [[ -n "$line" ]] && { printf '%s' "$line" >&3 2>/dev/null || break; }
+        (( r > 128 )) || break
+        [[ -e "$tmp/rc" ]] && break
+    fi
+done
+exec 3>&-
+while [[ ! -e "$tmp/rc" ]]; do
+    sleep 0.05
+done
+rc="$(cat "$tmp/rc")"
+rm -rf "$tmp"
+exit "$rc"

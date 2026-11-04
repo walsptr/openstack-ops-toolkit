@@ -196,6 +196,8 @@ Generated with `bash main.sh --workdir . --list`:
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | IP Information | network | `network/get-ip-info.sh` | no | Find who uses an IP: floating IPs and port fixed IPs (single IP or list) |
 | Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
+| Search Container Logs | rhosp | `rhosp/search-container-logs.sh` | no | Search a keyword in OpenStack container logs across RHOSP nodes |
+| View Container Logs | rhosp | `rhosp/view-container-logs.sh` | no | Search and read OpenStack container logs on RHOSP nodes (tail, follow) |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | List Instances by Host | servers | `servers/list-instances-by-host.sh` | no | Export instances on selected compute hosts to CSV (for maintenance notice) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -795,6 +797,130 @@ Environment (mainly for tests): `OSOPS_SSH`, `OSOPS_SCP`, `OSOPS_ANSIBLE_INVENTO
 `OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`, `OSOPS_SOS_LOCAL_DIR`, `OSOPS_SOS_MIN_FREE_GB` (5),
 `OSOPS_SOS_MIN_FREE_HARD_GB` (1), `OSOPS_SOS_DEST_GB_PER_NODE` (2), `OSOPS_SOS_PROGRESS_INTERVAL` (10).
 
+### View Container Logs (`rhosp/view-container-logs.sh`) and Search Container Logs (`rhosp/search-container-logs.sh`)
+
+Read and search the OpenStack service logs of **RHOSP 17.1** nodes (`/var/log/containers`, one
+subdirectory per service, including `httpd/` and `stdouts/`) on several nodes at once. Both are
+**read-only** (Modifies resources: **No**): on the nodes only `sudo -n find`, `sudo -n tail`, and
+(search) `sudo -n grep` / `sudo -n zgrep` are run. Run them **on the undercloud as user `stack`**;
+inventory, node picker, host keys and SSH are the same as *Collect sosreport* (`lib/rhosp.sh`). A
+different RHOSP version or a user other than `stack` is only a warning. Marked `@platform: rhosp`.
+
+- **View** — the last N lines (`tail`) or live (`follow`).
+- **Search** — a keyword (e.g. a request ID) in selected files or in all logs.
+
+**Common flow**
+
+1. **Nodes** — the same picker as *Collect sosreport* (fzf multi-select or numbered menu) with one
+   entry per role at the top, built from the inventory: `[semua Controller]`,
+   `[semua ComputeInstanceHA]`, ... You can also pick single nodes, or use `--node` / `--role`
+   (repeatable; `--node` also accepts the `canonical_hostname`).
+2. **File discovery and pre-check** — one SSH call per node (in parallel):
+   `sudo -n find /var/log/containers -type f -printf '%s\t%T@\t%P\0'`. An unreachable node, a host
+   key mismatch, failed authentication, or failed `sudo` skips that node with the reason shown; if
+   every node fails, the script exits. Unknown host keys need one confirmation (`accept-new`); with
+   no terminal they are skipped.
+3. **File picker** — the active files of all selected nodes merged: path, `nodes having it/selected`
+   (e.g. `3/3`), largest size, newest change time, sorted by path. Typing `nova api` narrows to
+   `nova/nova-api.log`; the preview shows the last 30 lines from the first node that has the file.
+   Without fzf: a numbered menu with a text filter (all words must match). Rotated files (`.1`,
+   `-YYYYMMDD`, `.gz`, `.xz`, `.bz2`, `.zst`) are not listed; they belong to their parent file. File
+   names with characters other than letters, digits, and `@ _ + . , = -` are skipped with a warning.
+   A file that exists on only some nodes is reported, and the run continues on the nodes that have it.
+   `--log PATH` (relative to `/var/log/containers`, repeatable) skips the picker.
+
+```bash
+# View: from the TUI no arguments (nodes, files, mode, lines are asked)
+rhosp/view-container-logs.sh
+rhosp/view-container-logs.sh --role Controller --log nova/nova-api.log --lines 500
+rhosp/view-container-logs.sh --node overcloud-computeiha-0 --log nova/nova-compute.log --mode follow
+rhosp/view-container-logs.sh --role Controller --log keystone/keystone.log --save
+
+# Search: trace one request ID on all controllers in all logs
+rhosp/search-container-logs.sh --role Controller --all-logs --keyword req-6f1c2b0e-...
+# The same from the TUI: pick "[semua Controller]", type the request ID, pick "[semua file log]"
+rhosp/search-container-logs.sh --role Controller --log nova/nova-api.log --log neutron/server.log \
+    --keyword 'No valid host' --ignore-case --context 3 --include-rotated
+```
+
+**View options**
+
+| Option | Description |
+|---|---|
+| `--mode tail\|follow` | Default: asked (no terminal: `tail`) |
+| `--lines N` | Lines for `tail` (default 200). For `follow`: initial lines per file before going live (default 10) |
+| `--save` | Save the tail result (see below). Not possible with `follow` |
+
+- **tail** — one SSH per node (`sudo -n tail -v -n N -- <files>`), in parallel. Results grouped
+  per node and file with a header (`══════ <host> │ <file> ══════`), shown through
+  `${PAGER:-less -R}`. Afterwards there is a menu: `[m]ode`, `[f]ile`, `[n]ode`, `[s]impan`,
+  `[q] kembali`. Use it to keep browsing without selecting everything again.
+- **follow** — every selected file on every selected node at the same time, one SSH per node (not
+  per file). Every line has the prefix `[<host> <file>]` in a colour per node, in one stream.
+  `Ctrl-C` stops all connections and returns to the TUI. There is no time limit.
+- **How the remote `tail` stops** — the remote command is
+  `sudo -n tail -F -v -n N --pid=$$ -- <files> & cat >/dev/null`. The ssh stdin is a FIFO that the
+  script holds open and never writes to. When `ssh` ends (`Ctrl-C`, kill, closed connection),
+  `sshd` closes the stdin of the remote command. `cat` ends, the remote shell exits, and
+  `tail --pid` stops within about one second. No TTY is used (`BatchMode`, no `-t`).
+  **Limitation:** if the network drops abruptly (no TCP FIN/RST reaches the node), `sshd` only
+  closes the session after its keepalive detects it (`ClientAliveInterval`, or TCP keepalive). The
+  remote `tail` keeps running until then. It only reads, but you can check with
+  `ssh <node> pgrep -af 'tail -F'`.
+
+**Search options**
+
+| Option | Description |
+|---|---|
+| `--keyword TEXT` | Keyword. Without it, it is asked (required, not empty, no newline) |
+| `--regex` | Keyword as ERE (`grep -E`). Default: fixed string (`grep -F`), so `req-1.2` does not match `req-1x2` |
+| `--ignore-case` | Interactive: asked (default no) |
+| `--all-logs` | All active files in `/var/log/containers`, no file picker. Same as the picker entry `[semua file log]`. The total size per node is shown first; the picker entry also asks for confirmation |
+| `--include-rotated` | Also search rotated files: uncompressed ones (`grep`) and `.gz` (`zgrep`). `.xz`, `.bz2`, `.zst` are skipped and listed in the summary. Interactive: asked, with the number and total size of the rotated files (default no). Right after a rotation the active file can be empty (0 bytes) and the recent lines are in `.1` (seen on RHOSP 17.1.13, where rotation is `.N` / `.N.gz` up to about 14 files): use this option when a recent request is not found |
+| `--context N` | Lines before and after a match (default 0) |
+| `--max-per-file N` | Maximum matches per file per node (default 500, `grep --max-count`). A file that reaches it is marked `TERPOTONG` |
+| `--timeout SEC` | Time limit per node (default 300) |
+| `--save` | Save the result (see below) |
+
+- **Remote command** — one SSH per node, all nodes in parallel. It runs as
+  `nice -n 19 ionice -c3 timeout <SEC> sh -c '... xargs -0 sudo -n grep|zgrep -H -n -F|-E [-i] --max-count=N [--context=N] -e "$1" --'`.
+  **The keyword and the file list are never part of the command string.** They are sent on the
+  ssh stdin: line 1 is the keyword, lines 2–3 are the plain and `.gz` file lists. `xargs -0`
+  splits long lists (e.g. `--all-logs`) to stay below the argument length limit. `-e` keeps a
+  keyword that starts with `-` from being read as an option. Quotes, spaces, `$()`, `;` and
+  backticks are matched literally.
+- **Progress per node** — searching, done (number of matches), timeout, or failed. The result goes
+  through the pager:
+  - Every line has the prefix `[<host> <file>:<line>]`. Context lines use `[<host> <file>-<line>]`,
+    and a `--` line separates context blocks.
+  - Lines are grouped per node, then per file.
+  - The keyword is highlighted (on a terminal only).
+- **Summary** — shown at the top of the pager and printed again afterwards:
+  - matches per node and per file, with `TERPOTONG`;
+  - nodes that timed out (partial results are kept) or failed, with the reason;
+  - compressed files that were skipped;
+  - when nothing matched, a clear `TIDAK ADA KECOCOKAN ...` line with the searched scope.
+- **Menu** — `[k]ata kunci baru` (same nodes and scope), `[c]akupan`, `[n]ode`, `[s]impan`,
+  `[q] kembali`.
+
+**Saving** (`--save` or `[s]` in the menu): the plain-text result (no colours) is written to
+`/tmp/container-logs-<view|search>-<YYYYmmdd-HHMMSS>.log` with permission `600` and `noclobber`
+(an existing name gets `-2`, `-3`, ...). Logs can contain sensitive data: delete the file when
+done. `/tmp` can be cleaned by systemd-tmpfiles.
+
+**Without a terminal**, colours and the pager are off, the result is printed, and there is no menu.
+`--node`/`--role` plus `--log` (view), or plus `--keyword` and `--log`/`--all-logs` (search), are
+required.
+
+**Logging** (`log/rhosp/view-container-logs-*.log`, `search-container-logs-*.log`) — `INPUT`,
+`SELECT`, `DISCOVERY` per node, `FILES` / `SCOPE`, `KEYWORD`, the mode, `RESULT action=lookup` per
+node (`files=`, `matches=`, `truncated=`, `duration=`, `status=TIMEOUT|GAGAL`), `SAVE`, `SUMMARY`.
+The content of the logs that were read is never written to the toolkit log. The fzf preview
+(`--_preview`, internal) does not log.
+
+Environment (mainly for tests): `OSOPS_SSH`, `OSOPS_ANSIBLE_INVENTORY`, `OSOPS_FZF`,
+`OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`, `OSOPS_CL_SAVE_DIR` (`/tmp`), `PAGER` (`less -R`).
+
 ## Logging
 
 Every script run is logged, whether it is started from the TUI or directly
@@ -961,7 +1087,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Example of the optional local override file
 ├── CLAUDE.md               # Architecture and contribution guide
-├── lib/                    # Shared helpers for scripts (logging.sh, api.sh, netinfo.sh), never listed in the TUI
+├── lib/                    # Shared helpers for scripts (logging.sh, api.sh, netinfo.sh, rhosp.sh, containerlogs.sh), never listed in the TUI
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
@@ -979,7 +1105,10 @@ Tests for `servers/live-migrate.sh`, `volumes/delete-volume.sh`, `images/upload-
 against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no cloud needed; requires `tmux`, `jq`,
 `flock`; `fzf` for the picker tests; the `get-ip-info` installer test uses `unshare -r`).
 `rhosp/collect-sosreport.sh` runs against stub `ssh`/`scp`/`ansible-inventory`/`sudo`/`sosreport`/`pcs`/`fzf`
-and an inventory fixture (needs `ssh-keygen`):
+and an inventory fixture (needs `ssh-keygen`). `rhosp/view-container-logs.sh` and
+`rhosp/search-container-logs.sh` run against a stub `ssh` that executes the real remote commands
+(`find`, `tail`, `grep`, `zgrep`, `nice`, `ionice`, `timeout`, `xargs`) on a fake
+`/var/log/containers` tree per host, plus stub `sudo`/`fzf`/`less` (needs `setsid`, `gzip`):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
@@ -990,6 +1119,8 @@ bash tests/collect-public-fip/run.sh
 bash tests/list-instances-by-host/run.sh
 bash tests/get-ip-info/run.sh
 bash tests/collect-sosreport/run.sh
+bash tests/view-container-logs/run.sh
+bash tests/search-container-logs/run.sh
 ```
 
 ## Troubleshooting
@@ -1014,4 +1145,6 @@ bash tests/collect-sosreport/run.sh
 | `FENCING MUNGKIN MASIH DI-DISABLE OLEH EKSEKUSI SEBELUMNYA` | A previous *Collect sosreport* run stopped before restoring `stonith-enabled` (state file `log/rhosp/collect-sosreport-fencing.state`). Choose `r` to restore the recorded value, or restore manually with the command shown |
 | `FENCING BELUM DIPULIHKAN!` | No controller could restore `stonith-enabled`. Run the command shown on a controller and check with `sudo pcs property config stonith-enabled`; delete the state file afterwards (or let the next run detect it) |
 | A script is shown as `(rhosp only)` | Its `@platform` is not met on this host (`/etc/rhosp-release` missing). Run the toolkit on the undercloud, or hide it with `!path` in `scripts.env` |
+| Container logs: node `DILEWATI (sudo failed)` / `(host key unknown)` | The SSH user needs passwordless `sudo` on the node (`tripleo-admin` has it by default). Unknown host keys are only accepted after a confirmation on a terminal; without a terminal they are skipped |
+| Container logs: `tail` still running on a node after a lost connection | Only possible when the network dropped abruptly: `sshd` closes the session after its keepalive. Check with `ssh tripleo-admin@<node> pgrep -af 'tail -F'` (it only reads; it stops at the next session close or can be ended with `sudo pkill -f 'tail -F -v'`) |
 | `lib/logging.sh tidak ditemukan` | `lib/` is missing from the install: re-run `./install.sh` |
