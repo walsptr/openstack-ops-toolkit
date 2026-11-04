@@ -78,6 +78,14 @@ if ! source "${OSOPS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib
 fi
 log_init
 
+# Inventory, pemilihan node, wrapper SSH (lib/rhosp.sh)
+# shellcheck source=../lib/rhosp.sh
+if ! source "$OSOPS_HOME/lib/rhosp.sh" 2>/dev/null; then
+    echo "❌ lib/rhosp.sh tidak ditemukan. Periksa instalasi toolkit (install.sh)."
+    exit 1
+fi
+RHOSP_WITH_UNDERCLOUD=1
+
 # ============================================================
 # Konfigurasi
 # ============================================================
@@ -94,8 +102,6 @@ TIMEOUT_MIN=60
 KEEP_REMOTE=0
 DRY_RUN=0
 
-RHOSP_RELEASE_FILE="${OSOPS_RHOSP_RELEASE_FILE:-/etc/rhosp-release}"
-STACK_HOME="${OSOPS_STACK_HOME:-/home/stack}"
 REMOTE_SOS_DIR="/var/tmp"
 LOCAL_SOS_DIR="${OSOPS_SOS_LOCAL_DIR:-/var/tmp}"
 MIN_FREE_GB="${OSOPS_SOS_MIN_FREE_GB:-5}"
@@ -107,40 +113,16 @@ PROGRESS_INTERVAL="${OSOPS_SOS_PROGRESS_INTERVAL:-10}"
 SSH_TIMEOUT=120
 RESTORE_TIMEOUT=60
 
-# Perintah eksternal (override lewat env string, mis. untuk stub di tes)
-read -ra SSH_CMD <<< "${OSOPS_SSH:-ssh}"
-read -ra SCP_CMD <<< "${OSOPS_SCP:-scp}"
-read -ra ANSIBLE_INV_CMD <<< "${OSOPS_ANSIBLE_INVENTORY:-ansible-inventory}"
-read -ra FZF_CMD <<< "${OSOPS_FZF:-fzf}"
-
-US=$'\x1f'
-
-if [[ -t 1 ]]; then
-    C_BOLD=$'\e[1m' C_DIM=$'\e[2m' C_RED=$'\e[31m' C_GREEN=$'\e[32m'
-    C_YELLOW=$'\e[33m' C_CYAN=$'\e[36m' C_RESET=$'\e[0m'
-else
-    C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_CYAN="" C_RESET=""
-fi
-
-# Node dari inventory (array paralel, index = node). Undercloud (lokal)
-# ditambahkan di akhir dengan N_LOCAL=1.
-N_NAME=() N_ROLE=() N_IP=() N_USER=() N_KEY=() N_PORT=() N_CANON=()
-N_PCMK=() N_PCMKR=() N_LOCAL=()
+# Node dari inventory: array N_NAME, N_ROLE, N_IP, ... N_SEL, N_HK di lib/rhosp.sh
+# (undercloud lokal ditambahkan di akhir dengan N_LOCAL=1, UC_IDX).
 # State per node
-N_SEL=() N_HK=() N_RELEASE=() N_SOS_RPM=() N_EPOCH=() N_FREE_KB=()
+N_RELEASE=() N_SOS_RPM=() N_EPOCH=() N_FREE_KB=()
 N_CLUSTER=() N_MEMBER=() N_RESULT=() N_MSG=() N_REMOTE=() N_REMOTE_SUM=()
 N_SHA=() N_LOCALF=() N_SIZE=() N_DUR=() N_METHOD=() N_LOGGED=()
 N_PH_T0=() N_SOSDONE=()
-declare -A IDX_BY_NAME=()
-UC_IDX=-1
-UC_NAME=""
-SEL=()
 CTRL_LIST=()
 
-UC_RELEASE=""
-INV_SOURCE=""
 WORK_DIR=""
-INV_JSON=""
 LOCK_FILE=""
 STATE_FILE=""
 REPORT_FILE=""
@@ -169,21 +151,6 @@ RUNNING_NAMES=""
 # Helpers
 # ============================================================
 
-die() {
-    echo "${C_RED}❌ $1${C_RESET}"
-    log_error -q "$1"
-    exit "${2:-1}"
-}
-
-warn() {
-    echo "${C_YELLOW}⚠️  $1${C_RESET}"
-    log_warn -q "$1"
-}
-
-info() {
-    echo "${C_CYAN}ℹ️  $1${C_RESET}"
-}
-
 # Peringatan menonjol (kotak merah)
 big_warning() {
     local line
@@ -194,33 +161,6 @@ big_warning() {
     done
     echo "${C_RED}${C_BOLD}╚══════════════════════════════════════════════════════════════════════╝${C_RESET}"
     echo
-}
-
-has_tty() {
-    ( : < /dev/tty ) 2>/dev/null
-}
-
-# ask VAR PROMPT — prompt dari /dev/tty (nama lokal unik untuk printf -v)
-ask() {
-    local __ask_reply=""
-    printf '%s' "$2" > /dev/tty
-    IFS= read -r __ask_reply < /dev/tty || __ask_reply=""
-    printf -v "$1" '%s' "$__ask_reply"
-}
-
-is_yes() {
-    [[ "${1,,}" == "y" || "${1,,}" == "yes" ]]
-}
-
-trim() {
-    local s="$1"
-    s="${s#"${s%%[![:space:]]*}"}"
-    s="${s%"${s##*[![:space:]]}"}"
-    printf '%s' "$s"
-}
-
-is_uint() {
-    [[ "$1" =~ ^[0-9]+$ ]]
 }
 
 fmt_dur() {
@@ -260,11 +200,6 @@ is_ip() {
     [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ || "$1" == *:* ]]
 }
 
-short_name() {
-    local s="${1,,}"
-    printf '%s' "${s%%.*}"
-}
-
 is_controller_role() {
     [[ "${N_ROLE[$1],,}" == *controller* ]]
 }
@@ -280,100 +215,13 @@ set_result() {
 }
 
 # ============================================================
-# SSH / SCP wrapper (satu-satunya jalur ke node)
-# ============================================================
-
-SSH_OPTS=()
-
-build_ssh_opts() {
-    local i="$1" port_flag="$2"
-
-    SSH_OPTS=(
-        -o BatchMode=yes
-        -o ConnectTimeout=10
-        -o ServerAliveInterval=15
-        -o "StrictHostKeyChecking=${N_HK[$i]:-yes}"
-    )
-    [[ -n "${N_KEY[$i]}" && -r "${N_KEY[$i]}" ]] && SSH_OPTS+=(-i "${N_KEY[$i]}")
-    [[ -n "${N_PORT[$i]}" ]] && SSH_OPTS+=("$port_flag" "${N_PORT[$i]}")
-    return 0
-}
-
-# ssh_node IDX TIMEOUT_DETIK REMOTE_CMD — stdout/stderr perintah remote apa adanya.
-# Tanpa -t, stdin dari /dev/null; timeout lokal sebagai pengaman.
-ssh_node() {
-    local i="$1" t="$2" cmd="$3"
-    build_ssh_opts "$i" -p
-    timeout --kill-after=10 "$t" \
-        "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@${N_IP[$i]}" "$cmd" < /dev/null
-}
-
-# scp_fetch IDX REMOTE_PATH LOCAL_PATH
-scp_fetch() {
-    local i="$1" src="$2" dst="$3" host
-    host="${N_IP[$i]}"
-    [[ "$host" == *:* ]] && host="[$host]"
-    build_ssh_opts "$i" -P
-    timeout --kill-after=10 $(( TIMEOUT_MIN * 60 )) \
-        "${SCP_CMD[@]}" -q "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$host:$src" "$dst" < /dev/null
-}
-
-# Klasifikasi kegagalan SSH dari stderr => alasan SKIPPED
-ssh_fail_reason() {
-    local err="$1" rc="$2"
-    if [[ "$err" == *"REMOTE HOST IDENTIFICATION HAS CHANGED"* || "$err" == *"Host key verification failed"* ]]; then
-        printf 'host key mismatch'
-    elif [[ "$err" == *"Permission denied"* ]]; then
-        printf 'ssh auth failed'
-    elif (( rc == 124 || rc == 137 )); then
-        printf 'unreachable (timeout)'
-    else
-        printf 'unreachable'
-    fi
-}
-
-# ============================================================
 # 1. Environment
 # ============================================================
 
 check_environment() {
-    local answer tool user
+    local tool
 
-    if [[ ! -f "$RHOSP_RELEASE_FILE" ]]; then
-        die "Script ini hanya untuk undercloud RHOSP: $RHOSP_RELEASE_FILE tidak ditemukan."
-    fi
-
-    UC_RELEASE="$(head -n 1 "$RHOSP_RELEASE_FILE" 2>/dev/null)" || UC_RELEASE=""
-    UC_RELEASE="$(trim "$UC_RELEASE")"
-    echo "🏷️  RHOSP undercloud : ${UC_RELEASE:-(kosong)}"
-    log_event ENV "rhosp_release=$UC_RELEASE" "release_file=$RHOSP_RELEASE_FILE"
-
-    if [[ ! "$UC_RELEASE" =~ release[[:space:]]+17\.1([^0-9]|$) ]]; then
-        warn "Script ini dirancang untuk RHOSP 17.1. Pada versi lain struktur inventory dan perilaku pcs bisa berbeda."
-        ask answer "Tetap lanjut di versi ini? [y/N]: "
-        if ! is_yes "$answer"; then
-            log_event DECISION release_mismatch=cancel
-            echo "❌ Dibatalkan."
-            exit 0
-        fi
-        log_event DECISION release_mismatch=continue
-    fi
-
-    user="$(id -un)"
-    if [[ "$user" != "stack" ]]; then
-        warn "Script dijalankan sebagai '$user', bukan 'stack'. Key SSH (~/.ssh/id_rsa) dan known_hosts yang dipakai milik user ini."
-        ask answer "Tetap lanjut sebagai $user? [y/N]: "
-        if ! is_yes "$answer"; then
-            log_event DECISION user_mismatch=cancel "user=$user"
-            echo "❌ Dibatalkan."
-            exit 0
-        fi
-        log_event DECISION user_mismatch=continue "user=$user"
-    fi
-
-    command -v jq >/dev/null 2>&1 || die "jq tidak ditemukan. Install jq (dnf install jq)."
-    command -v "${ANSIBLE_INV_CMD[0]}" >/dev/null 2>&1 || \
-        die "ansible-inventory tidak ditemukan (${ANSIBLE_INV_CMD[0]}). Jalankan di undercloud."
+    rhosp_check_env confirm
     for tool in "${SSH_CMD[0]}" "${SCP_CMD[0]}" timeout sha256sum; do
         command -v "$tool" >/dev/null 2>&1 || die "$tool tidak ditemukan."
     done
@@ -451,149 +299,21 @@ acquire_lock() {
 # 2. Inventory
 # ============================================================
 
-find_inventory() {
-    local default="$STACK_HOME/inventory.yaml"
-    local pattern="$STACK_HOME/overcloud-deploy/*/tripleo-ansible-inventory.yaml"
-    local -a stacks=()
-    local i choice
-
-    if [[ -n "$INVENTORY" ]]; then
-        [[ -f "$INVENTORY" && -r "$INVENTORY" ]] || die "Inventory tidak ditemukan atau tidak bisa dibaca: $INVENTORY"
-        INV_SOURCE="option"
-    elif [[ -f "$default" && -r "$default" ]]; then
-        INVENTORY="$default"
-        INV_SOURCE="default"
-    else
-        mapfile -t stacks < <(compgen -G "$pattern" | LC_ALL=C sort)
-
-        if (( ${#stacks[@]} == 0 )); then
-            echo "${C_RED}❌ Inventory tidak ditemukan. Path yang sudah dicek:${C_RESET}"
-            echo "   - $default"
-            echo "   - $pattern"
-            echo "   Gunakan --inventory <path>."
-            log_error -q "inventory tidak ditemukan: $default, $pattern"
-            exit 1
-        fi
-
-        if (( ${#stacks[@]} == 1 )); then
-            INVENTORY="${stacks[0]}"
-        else
-            echo "📚 Ditemukan beberapa stack di $STACK_HOME/overcloud-deploy:"
-            for i in "${!stacks[@]}"; do
-                printf '  %d) %s\n' $(( i + 1 )) "$(basename "$(dirname "${stacks[$i]}")")"
-            done
-            while true; do
-                ask choice "Pilih stack [1-${#stacks[@]}]: "
-                if is_uint "$choice" && (( choice >= 1 && choice <= ${#stacks[@]} )); then
-                    break
-                fi
-                echo "${C_RED}❌ Pilihan tidak valid.${C_RESET}"
-            done
-            INVENTORY="${stacks[$(( choice - 1 ))]}"
-        fi
-        INV_SOURCE="stack"
-    fi
-
-    echo "📒 Inventory        : $INVENTORY"
-    log_event INPUT "inventory=$INVENTORY" "source=$INV_SOURCE"
-}
-
-# Program jq: hanya field yang dibutuhkan yang keluar dari hostvars
-# (aturan data sensitif: hostvars tidak pernah dicetak/di-log utuh).
-# Baris "U<US>nama" untuk undercloud, "N<US>..." untuk node overcloud.
-# shellcheck disable=SC2016  # variabel jq, bukan shell
-JQ_NODES='
-def members($g): ((.[$g].hosts // []) + ([(.[$g].children // [])[] as $c | members($c)] | add // []));
-def uniq: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
-def clean: if . == null then "" else tostring | gsub("[\u001f\t\r\n]"; " ") end;
-. as $root
-| ((members("Undercloud") + members("undercloud")) | uniq) as $uc
-| ((if has("allovercloud") then members("allovercloud")
-    else ((._meta.hostvars // {} | keys) + members("all")) end)
-   | uniq | map(. as $h | select($uc | any(.[]; . == $h) | not))) as $oc
-| (if has("allovercloud") then (.allovercloud.children // [])
-   elif has("overcloud") then (.overcloud.children // [])
-   else [] end) as $rg
-| [ $rg[] as $c | {g: $c, m: members($c)} ] as $rgm
-| members("pacemaker") as $pm
-| members("pacemaker_remote") as $pmr
-| ( $uc[] | "U\u001f" + clean ),
-  ( $oc[] as $h
-    | ($root._meta.hostvars[$h] // {}) as $hv
-    | [ "N", $h,
-        ($hv.tripleo_role_name // ([ $rgm[] | select(.m | any(.[]; . == $h)) | .g ][0]) // "unknown"),
-        ($hv.ansible_host // $h),
-        ($hv.ansible_ssh_user // $hv.ansible_user // "tripleo-admin"),
-        ($hv.ansible_ssh_private_key_file // $hv.ansible_private_key_file // ""),
-        ($hv.ansible_port // $hv.ansible_ssh_port // ""),
-        ($hv.canonical_hostname // ""),
-        (if $pm | any(.[]; . == $h) then "1" else "0" end),
-        (if $pmr | any(.[]; . == $h) then "1" else "0" end)
-      ] | map(clean) | join("\u001f") )
-'
-
-add_node() {
-    local i=${#N_NAME[@]}
-    N_NAME+=("$1") N_ROLE+=("$2") N_IP+=("$3") N_USER+=("$4") N_KEY+=("$5")
-    N_PORT+=("$6") N_CANON+=("$7") N_PCMK+=("$8") N_PCMKR+=("$9") N_LOCAL+=("${10}")
-    N_SEL+=(0) N_HK+=("") N_RELEASE+=("") N_SOS_RPM+=("") N_EPOCH+=("") N_FREE_KB+=("")
+# Array milik script untuk setiap node baru (hook lib/rhosp.sh)
+# shellcheck disable=SC2329  # dipanggil oleh rhosp_add_node
+rhosp_on_node_added() {
+    N_RELEASE+=("") N_SOS_RPM+=("") N_EPOCH+=("") N_FREE_KB+=("")
     N_CLUSTER+=(0) N_MEMBER+=("") N_RESULT+=("") N_MSG+=("") N_REMOTE+=("") N_REMOTE_SUM+=("")
     N_SHA+=("") N_LOCALF+=("") N_SIZE+=("") N_DUR+=(0) N_METHOD+=("") N_LOGGED+=(0)
     N_PH_T0+=(0) N_SOSDONE+=(0)
-    IDX_BY_NAME["${1,,}"]=$i
 }
 
 load_nodes() {
-    local -a lines=()
-    local line kind name role ip user key port canon pm pmr n_ctrl=0 n_comp=0 n_bad=0
-    local rc=0 errfile="$WORK_DIR/ansible-inventory.err"
+    local i
 
-    INV_JSON="$WORK_DIR/inventory.json"
-    "${ANSIBLE_INV_CMD[@]}" -i "$INVENTORY" --list > "$INV_JSON" 2> "$errfile" || rc=$?
-    if (( rc != 0 )); then
-        echo "${C_RED}❌ ansible-inventory gagal (rc=$rc):${C_RESET}"
-        tail -n 5 "$errfile" | sed 's/^/   /'
-        log_error -q "ansible-inventory gagal rc=$rc inventory=$INVENTORY"
-        exit 1
-    fi
-
-    if ! jq -r "$JQ_NODES" "$INV_JSON" > "$WORK_DIR/nodes.lst" 2> "$errfile"; then
-        die "Output ansible-inventory --list tidak bisa diproses jq: $(head -c 300 "$errfile")"
-    fi
-    mapfile -t lines < "$WORK_DIR/nodes.lst"
-
-    for line in "${lines[@]}"; do
-        IFS="$US" read -r kind name role ip user key port canon pm pmr <<< "$line"
-        if [[ "$kind" == "U" ]]; then
-            [[ -z "$UC_NAME" ]] && UC_NAME="$name"
-            continue
-        fi
-
-        # Validasi sebelum dipakai di argumen ssh (cegah opsi/karakter aneh)
-        if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || ! "$ip" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ \
-              || ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ || ( -n "$port" && ! "$port" =~ ^[0-9]+$ ) ]]; then
-            n_bad=$(( n_bad + 1 ))
-            warn "Host inventory dengan hostname/IP/user/port tidak valid dilewati: ${name//[^A-Za-z0-9._-]/?}"
-            continue
-        fi
-        [[ -n "${IDX_BY_NAME[${name,,}]+x}" ]] && continue
-
-        key="${key/#\~/$HOME}"
-        [[ -z "$key" ]] && key="$HOME/.ssh/id_rsa"
-
-        add_node "$name" "$role" "$ip" "$user" "$key" "$port" "$canon" "${pm:-0}" "${pmr:-0}" 0
-        [[ "$pm" == 1 ]] && n_ctrl=$(( n_ctrl + 1 ))
-        [[ "$pmr" == 1 ]] && n_comp=$(( n_comp + 1 ))
-    done
-
-    (( ${#N_NAME[@]} > 0 )) || die "Tidak ada node overcloud di inventory: $INVENTORY"
-
-    # Undercloud (lokal), tidak lewat SSH
-    UC_IDX=${#N_NAME[@]}
-    add_node "${UC_NAME:-undercloud}" "Undercloud" "localhost" "$(id -un)" "" "" "" 0 0 1
+    rhosp_load_nodes
 
     # Controller untuk pcs: grup pacemaker, fallback role "controller"
-    local i
     for i in "${!N_NAME[@]}"; do
         (( N_LOCAL[i] )) && continue
         [[ "${N_PCMK[$i]}" == 1 ]] && CTRL_LIST+=("$i")
@@ -604,275 +324,7 @@ load_nodes() {
             is_controller_role "$i" && CTRL_LIST+=("$i")
         done
     fi
-
-    echo "🖥️  Node overcloud   : $(( ${#N_NAME[@]} - 1 )) (pacemaker: $n_ctrl, pacemaker_remote: $n_comp)"
-    log_event INVENTORY "file=$INVENTORY" "nodes=$(( ${#N_NAME[@]} - 1 ))" "pacemaker=$n_ctrl" \
-        "pacemaker_remote=$n_comp" "invalid=$n_bad" "undercloud=${UC_NAME:--}"
-    for i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[i] )) && continue
-        log_event NODE "host=${N_NAME[$i]}" "role=${N_ROLE[$i]}" "ip=${N_IP[$i]}" "user=${N_USER[$i]}" \
-            "key=${N_KEY[$i]}" "port=${N_PORT[$i]:--}" "pacemaker=${N_PCMK[$i]}" "pacemaker_remote=${N_PCMKR[$i]}"
-    done
     return 0
-}
-
-# ============================================================
-# 4. Pilih node
-# ============================================================
-
-select_idx() {
-    if (( N_SEL[$1] == 0 )); then
-        N_SEL[$1]=1
-        SEL+=("$1")
-    fi
-}
-
-select_role() {
-    local role="${1,,}" i found=1
-    for i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[i] )) && continue
-        if [[ "${N_ROLE[$i],,}" == "$role" ]]; then
-            select_idx "$i"
-            found=0
-        fi
-    done
-    return "$found"
-}
-
-# Role unik sesuai urutan inventory
-list_roles() {
-    local i
-    local -A seen=()
-    for i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[i] )) && continue
-        [[ -n "${seen[${N_ROLE[$i]}]+x}" ]] && continue
-        seen["${N_ROLE[$i]}"]=1
-        printf '%s\n' "${N_ROLE[$i]}"
-    done
-    return 0
-}
-
-role_count() {
-    local i n=0
-    for i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[i] )) && continue
-        [[ "${N_ROLE[$i]}" == "$1" ]] && n=$(( n + 1 ))
-    done
-    printf '%d' "$n"
-}
-
-# Terapkan pilihan dari picker: role:<Role> | uc | node:<idx>
-apply_pick() {
-    case "$1" in
-        role:*) select_role "${1#role:}" || true ;;
-        uc)     select_idx "$UC_IDX" ;;
-        node:*) select_idx "${1#node:}" ;;
-    esac
-}
-
-picker_entries() {
-    local role i
-    P_KEY=() P_LABEL=()
-    while IFS= read -r role; do
-        P_KEY+=("role:$role")
-        P_LABEL+=("[semua $role] ($(role_count "$role") node)")
-    done < <(list_roles)
-    P_KEY+=("uc")
-    P_LABEL+=("Undercloud (lokal)")
-    for i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[i] )) && continue
-        P_KEY+=("node:$i")
-        P_LABEL+=("$(printf '%-28s %-20s %s' "${N_NAME[$i]}" "${N_ROLE[$i]}" "${N_IP[$i]}")")
-    done
-    return 0
-}
-
-pick_fzf() {
-    local out rc=0 line i
-    local -a picked=()
-
-    out="$(
-        for i in "${!P_KEY[@]}"; do
-            printf '%s\t%s\n' "${P_KEY[$i]}" "${P_LABEL[$i]}"
-        done | "${FZF_CMD[@]}" --multi --layout=reverse --border --info=inline \
-            --delimiter=$'\t' --with-nth=2.. \
-            --prompt='🖥️  node> ' \
-            --header=$'Tab: pilih/batal pilih (multi), Enter: selesai, Esc: batal\nHOSTNAME                     ROLE                 IP'
-    )" || rc=$?
-
-    (( rc == 0 )) || return 1
-    mapfile -t picked <<< "$out"
-    for line in "${picked[@]}"; do
-        [[ -n "$line" ]] && apply_pick "${line%%$'\t'*}"
-    done
-    return 0
-}
-
-pick_menu() {
-    local input tok a b k i ok
-    local -a toks=()
-
-    echo
-    echo "${C_BOLD}Pilih node:${C_RESET}"
-    for i in "${!P_KEY[@]}"; do
-        printf '  %2d) %s\n' $(( i + 1 )) "${P_LABEL[$i]}"
-    done
-
-    while true; do
-        ask input "Nomor (mis. 1 4 5, 3-6, a = semua node overcloud, kosong = batal): "
-        input="$(trim "$input")"
-        [[ -z "$input" ]] && return 1
-
-        read -ra toks <<< "${input//,/ }"
-        ok=1
-        for tok in "${toks[@]}"; do
-            if [[ "${tok,,}" == "a" ]]; then
-                continue
-            elif [[ "$tok" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]}
-                (( a >= 1 && b <= ${#P_KEY[@]} && a <= b )) || ok=0
-            elif is_uint "$tok"; then
-                (( tok >= 1 && tok <= ${#P_KEY[@]} )) || ok=0
-            else
-                ok=0
-            fi
-        done
-        (( ok )) && break
-        echo "${C_RED}❌ Input tidak valid: $input${C_RESET}"
-    done
-
-    for tok in "${toks[@]}"; do
-        if [[ "${tok,,}" == "a" ]]; then
-            for i in "${!N_NAME[@]}"; do
-                (( N_LOCAL[i] )) || select_idx "$i"
-            done
-        elif [[ "$tok" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-            for (( k = BASH_REMATCH[1]; k <= BASH_REMATCH[2]; k++ )); do
-                apply_pick "${P_KEY[$(( k - 1 ))]}"
-            done
-        else
-            apply_pick "${P_KEY[$(( tok - 1 ))]}"
-        fi
-    done
-    return 0
-}
-
-select_nodes() {
-    local n r i found names=""
-
-    if (( ${#NODE_ARGS[@]} > 0 || ${#ROLE_ARGS[@]} > 0 )); then
-        for n in "${NODE_ARGS[@]}"; do
-            found="${IDX_BY_NAME[${n,,}]:-}"
-            [[ -n "$found" ]] && (( N_LOCAL[found] )) && found=""
-            if [[ -z "$found" ]]; then
-                # Juga cocokkan short name dari canonical_hostname
-                for i in "${!N_NAME[@]}"; do
-                    (( N_LOCAL[i] )) && continue
-                    if [[ -n "${N_CANON[$i]}" && ( "${N_CANON[$i],,}" == "${n,,}" || "$(short_name "${N_CANON[$i]}")" == "${n,,}" ) ]]; then
-                        found="$i"
-                        break
-                    fi
-                done
-            fi
-            if [[ -n "$found" ]]; then
-                select_idx "$found"
-            else
-                warn "Node tidak dikenal di inventory, dilewati: $n"
-            fi
-        done
-        for r in "${ROLE_ARGS[@]}"; do
-            if ! select_role "$r"; then
-                warn "Role tidak dikenal di inventory, dilewati: $r (role yang ada: $(list_roles | paste -sd, -))"
-            fi
-        done
-        (( INCLUDE_UC )) && select_idx "$UC_IDX"
-    else
-        (( INCLUDE_UC )) && select_idx "$UC_IDX"
-        picker_entries
-        if command -v "${FZF_CMD[0]}" >/dev/null 2>&1; then
-            pick_fzf || true
-        else
-            pick_menu || true
-        fi
-    fi
-
-    if (( ${#SEL[@]} == 0 )); then
-        echo "Tidak ada node yang dipilih."
-        log_event SELECT selected=0
-        exit 0
-    fi
-
-    for i in "${SEL[@]}"; do
-        names+="${names:+,}${N_NAME[$i]}"
-    done
-    echo "✅ Node terpilih     : ${#SEL[@]} (${names})"
-    log_event SELECT "selected=${#SEL[@]}" "nodes=$names"
-}
-
-# ============================================================
-# 5. Host key SSH
-# ============================================================
-
-host_key_known() {
-    local i="$1" host="${N_IP[$1]}" f
-    [[ -n "${N_PORT[$i]}" && "${N_PORT[$i]}" != 22 ]] && host="[$host]:${N_PORT[$i]}"
-    for f in "$HOME/.ssh/known_hosts" /etc/ssh/ssh_known_hosts; do
-        [[ -r "$f" ]] || continue
-        ssh-keygen -F "$host" -f "$f" >/dev/null 2>&1 && return 0
-    done
-    return 1
-}
-
-# check_host_keys LABEL IDX... — host yang belum dikenal: satu konfirmasi
-# untuk StrictHostKeyChecking=accept-new; yang dikenal: yes; ditolak: reject.
-check_host_keys() {
-    local label="$1" i answer names=""
-    local -a unknown=()
-    shift
-
-    for i in "$@"; do
-        (( N_LOCAL[i] )) && continue
-        [[ -n "${N_HK[$i]}" ]] && continue
-        if command -v ssh-keygen >/dev/null 2>&1 && host_key_known "$i"; then
-            N_HK[i]="yes"
-        else
-            unknown+=("$i")
-        fi
-    done
-
-    (( ${#unknown[@]} == 0 )) && return 0
-
-    echo
-    warn "Host key SSH belum dikenal di known_hosts ($label):"
-    for i in "${unknown[@]}"; do
-        printf '     %-28s %s\n' "${N_NAME[$i]}" "${N_IP[$i]}"
-        names+="${names:+,}${N_NAME[$i]}"
-    done
-    echo "   Jika diterima, key disimpan ke ~/.ssh/known_hosts saat koneksi pertama"
-    echo "   (StrictHostKeyChecking=accept-new). Key yang BERUBAH tetap ditolak."
-    ask answer "Terima host key baru untuk ${#unknown[@]} host ini? [y/N]: "
-
-    if is_yes "$answer"; then
-        for i in "${unknown[@]}"; do
-            N_HK[i]="accept-new"
-        done
-        log_event DECISION hostkeys=accept-new "hosts=$names"
-    else
-        for i in "${unknown[@]}"; do
-            N_HK[i]="reject"
-        done
-        log_event DECISION hostkeys=reject "hosts=$names"
-    fi
-    return 0
-}
-
-# Catat fingerprint host key yang baru diterima (setelah koneksi pertama)
-log_accepted_key() {
-    local i="$1" host="${N_IP[$1]}" fp
-    [[ "${N_HK[$i]}" == "accept-new" ]] || return 0
-    [[ -n "${N_PORT[$i]}" && "${N_PORT[$i]}" != 22 ]] && host="[$host]:${N_PORT[$i]}"
-    fp="$(ssh-keygen -l -F "$host" -f "$HOME/.ssh/known_hosts" 2>/dev/null | awk '!/^#/ {print $3 "/" $2; exit}')" || fp=""
-    log_event HOSTKEY_ACCEPTED "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" "fingerprint=${fp:--}"
 }
 
 # ============================================================
@@ -1788,12 +1240,12 @@ job_copy() {
         ( umask 077; cp -- "$path" "$local_f" ) || job_fail FAILED "copy failed"
         [[ -n "$sumfile" ]] && ( umask 077; cp -- "$sumfile" "$local_f.sha256" ) 2>/dev/null
     else
-        if ! ( umask 077; scp_fetch "$i" "$path" "$local_f" ) 2> "$WORK_DIR/n$i.scp"; then
+        if ! ( umask 077; scp_fetch "$i" "$path" "$local_f" $(( TIMEOUT_MIN * 60 )) ) 2> "$WORK_DIR/n$i.scp"; then
             log_warn -q "${N_NAME[$i]}: scp gagal: $(tail -n 2 "$WORK_DIR/n$i.scp" | tr '\n' ' ')"
             job_fail FAILED "scp failed"
         fi
         if [[ -n "$sumfile" ]]; then
-            ( umask 077; scp_fetch "$i" "$sumfile" "$local_f.sha256" ) 2>/dev/null || \
+            ( umask 077; scp_fetch "$i" "$sumfile" "$local_f.sha256" $(( TIMEOUT_MIN * 60 )) ) 2>/dev/null || \
                 log_warn -q "${N_NAME[$i]}: file checksum tidak tersalin: $sumfile"
         fi
     fi
@@ -1845,17 +1297,6 @@ collect_job() {
     if [[ -n "$r" ]]; then
         set_result "$i" "$r" "$(st_get "$i" msg)"
     fi
-}
-
-# shellcheck disable=SC2329  # dipanggil oleh kill_workers
-kill_tree() {
-    local pid="$1" child
-    if command -v pgrep >/dev/null 2>&1; then
-        for child in $(pgrep -P "$pid" 2>/dev/null); do
-            kill_tree "$child"
-        done
-    fi
-    kill -TERM "$pid" 2>/dev/null || true
 }
 
 # shellcheck disable=SC2329  # dipanggil dari hook trap
@@ -2212,6 +1653,7 @@ done
 has_tty || die "Terminal (/dev/tty) tidak tersedia. Jalankan dari terminal interaktif."
 
 WORK_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/collect-sosreport.XXXXXX")" || die "Gagal membuat direktori sementara."
+RHOSP_WORK_DIR="$WORK_DIR"
 LOG_EXIT_HOOK=on_exit
 LOG_INTERRUPT_HOOK=on_interrupt
 
@@ -2224,10 +1666,10 @@ if (( ! DRY_RUN )); then
     acquire_lock
     check_session
 fi
-find_inventory
+rhosp_find_inventory
 load_nodes
 check_stale_state
-select_nodes
+rhosp_select_nodes
 
 # Host key: node terpilih + controller (untuk pcs)
 _hk=()
