@@ -212,6 +212,7 @@ bash tests/collect-public-fip/run.sh        # collect-public-fip tests (stub CLI
 bash tests/list-instances-by-host/run.sh    # list-instances-by-host tests (stub CLI + stub curl, tmux)
 bash tests/get-ip-info/run.sh               # get-ip-info + lib/netinfo.sh + install.sh rename tests (stub CLI + stub curl, tmux, unshare -r)
 bash tests/collect-sosreport/run.sh         # collect-sosreport + @platform in main.sh (stub ssh/scp/ansible-inventory/sudo/sosreport/pcs/fzf, tmux, ssh-keygen)
+bash tests/rc-candidates/run.sh             # RC file candidates in main.sh (--rc-candidates) + OS_CLOUD context (stub openstack, tmux)
 bash tests/view-container-logs/run.sh       # view-container-logs + lib/rhosp.sh + lib/containerlogs.sh (stub ssh/sudo/fzf/less, tmux, setsid)
 bash tests/search-container-logs/run.sh     # search-container-logs (same stubs; real find/grep/zgrep/xargs/nice/ionice/timeout)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table

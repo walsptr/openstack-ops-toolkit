@@ -138,8 +138,16 @@ To update, pull the latest changes and run `./install.sh` again.
 openstack-ops-toolkit
 ```
 
-On start you pick an OpenStack RC file (candidates matching `*openrc*`, `*rc.sh`, or `*-rc` in
-your home directory and the workdir are listed; you can also type a path). Lines containing
+On start you pick an OpenStack RC file, or type a path. Candidates are searched up to 3 levels
+deep in your home directory and the workdir, shallowest first:
+
+- names matching `*openrc*`, `*rc.sh`, or `*-rc`;
+- any other file ending in `rc` (e.g. `stackrc`, `overcloudrc`, `adminrc`) that contains
+  `export OS_AUTH_URL=` or `export OS_CLOUD=`. Hidden files such as `.bashrc` and files over
+  64 KiB are skipped.
+
+An RC file that only sets `OS_CLOUD` (the RHOSP 17.1 `stackrc`; credentials come from
+`clouds.yaml`) is shown as `Cloud: clouds.yaml: <name>`. Lines containing
 `PASSWORD`, `SECRET`, or `TOKEN` are hidden in the picker preview. The credentials are verified
 with `openstack token issue` before the TUI opens.
 

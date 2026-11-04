@@ -188,6 +188,9 @@ log_os_context_args() {
         "os_region=${OS_REGION_NAME:--}"
         "os_auth_host=${host:--}"
     )
+    # RC berbasis clouds.yaml (OS_CLOUD) tanpa OS_AUTH_URL/OS_USERNAME
+    [[ -n "${OS_CLOUD:-}" ]] && LOG_CTX+=("os_cloud=$OS_CLOUD")
+    return 0
 }
 
 log_init() {

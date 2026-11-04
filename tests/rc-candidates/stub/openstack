@@ -1,0 +1,9 @@
+#!/bin/bash
+# Stub openstack untuk tests/rc-candidates: "token issue" berhasil jika
+# OS_AUTH_URL atau OS_CLOUD diset (meniru clouds.yaml / RC biasa).
+if [[ "$*" == "token issue"* ]]; then
+    [[ -n "${OS_AUTH_URL:-}" || -n "${OS_CLOUD:-}" ]] && exit 0
+    echo "Missing value auth-url required for auth plugin password" >&2
+    exit 1
+fi
+exit 0

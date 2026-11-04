@@ -518,6 +518,28 @@ cmd_list() {
     done
 }
 
+# Kandidat RC file di $HOME dan workdir (maks. 3 level), satu per baris,
+# yang dangkal lebih dulu:
+# - nama *openrc*, *rc.sh, *-rc (seperti sebelumnya, tanpa cek isi);
+# - nama lain berakhiran "rc" (stackrc, overcloudrc, adminrc, ...) hanya jika
+#   berisi "export OS_AUTH_URL=" atau "export OS_CLOUD=" (stackrc RHOSP 17.1
+#   hanya berisi OS_CLOUD; kredensial di clouds.yaml). File/direktori
+#   tersembunyi (.bashrc, .vimrc, ...) dan file > 64 KiB dilewati.
+rc_candidates() {
+    local f
+    {
+        find "$HOME" "$WORKDIR" -maxdepth 3 -type f \
+            \( -iname '*openrc*' -o -iname '*rc.sh' -o -iname '*-rc' \) \
+            ! -path '*/.git/*' 2>/dev/null
+        find "$HOME" "$WORKDIR" -maxdepth 3 -type f -iname '*rc' \
+            ! -iname '*openrc*' ! -iname '*-rc' ! -path '*/.*' -size -64k 2>/dev/null \
+        | while IFS= read -r f; do
+            grep -qE '^[[:space:]]*export[[:space:]]+OS_(AUTH_URL|CLOUD)=' "$f" 2>/dev/null && printf '%s\n' "$f"
+        done
+    } | sort -u | awk '{ n = gsub("/", "/"); printf "%d\t%s\n", n, $0 }' \
+      | LC_ALL=C sort -t $'\t' -k1,1n -k2,2 | cut -f2-
+}
+
 case "${1:-}" in
     --rows)
         cmd_rows
@@ -525,6 +547,11 @@ case "${1:-}" in
         ;;
     --preview)
         cmd_preview "${2:-}"
+        exit 0
+        ;;
+    --rc-candidates)
+        # Kandidat RC file untuk picker (dipakai tes)
+        rc_candidates
         exit 0
         ;;
     --discover)
@@ -544,11 +571,7 @@ select_rc_file() {
     local candidates=()
 
     if (( USE_FZF )); then
-        mapfile -t candidates < <(
-            find "$HOME" "$WORKDIR" -maxdepth 3 -type f \
-                \( -iname '*openrc*' -o -iname '*rc.sh' -o -iname '*-rc' \) \
-                ! -path '*/.git/*' 2>/dev/null | sort -u
-        )
+        mapfile -t candidates < <(rc_candidates)
     fi
 
     if (( USE_FZF )) && (( ${#candidates[@]} > 0 )); then
@@ -640,9 +663,12 @@ switch_context() {
 build_header() {
     local total="$1"
 
-    local auth_host="${OS_AUTH_URL:-?}"
+    local auth_host="${OS_AUTH_URL:-}"
     auth_host="${auth_host#*://}"
     auth_host="${auth_host%%/*}"
+    # RC berbasis clouds.yaml (mis. stackrc RHOSP 17.1: hanya OS_CLOUD)
+    [[ -z "$auth_host" && -n "${OS_CLOUD:-}" ]] && auth_host="clouds.yaml: $OS_CLOUD"
+    auth_host="${auth_host:-?}"
 
     local -a info_k=("Context:" "Cloud:" "Region:" "User:" "Project:")
     local -a info_v=(
@@ -866,7 +892,7 @@ plain_loop() {
         fi
 
         echo
-        echo "🌐 Context: $(basename "$RC_FILE")  👤 ${OS_USERNAME:-?}  📁 ${OS_PROJECT_NAME:-?}"
+        echo "🌐 Context: $(basename "$RC_FILE")  👤 ${OS_USERNAME:-?}  📁 ${OS_PROJECT_NAME:-?}${OS_CLOUD:+  ☁️  $OS_CLOUD}"
         choice="$(menu_plain)" || { echo; echo "👋 Bye."; exit 0; }
 
         FLASH=""
