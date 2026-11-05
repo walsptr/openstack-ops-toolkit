@@ -80,17 +80,30 @@ if [[ "$AUTH_FAIL" == 1 ]]; then
 fi
 
 mkdir -p "$hd/bin" "$hd/var_tmp"
-for t in sudo pcs rpm df sosreport; do
+for t in sudo pcs rpm df sos sosreport; do
     ln -sfn "$HERE/bin/$t" "$hd/bin/$t"
 done
-[[ "$SOS_MISSING" == 1 ]] && rm -f "$hd/bin/sosreport"
+# Host tes bisa punya sos asli (/usr/bin/sos, mis. Fedora): node "remote" hanya
+# melihat /usr/bin dan /bin lewat symlink tanpa sos/sosreport asli, supaya
+# command -v sos tidak menemukan binary sungguhan. Dibuat sekali per host,
+# atomik (mv) karena panggilan ssh paralel.
+sysbin="$hd/sysbin"
+if [[ ! -d "$sysbin" ]]; then
+    tmpbin="$(mktemp -d "$hd/sysbin.XXXXXX")"
+    for f in /usr/bin/* /bin/*; do
+        b="${f##*/}"
+        [[ "$b" == sos || "$b" == sosreport || -e "$tmpbin/$b" ]] || ln -s "$f" "$tmpbin/$b" 2>/dev/null || true
+    done
+    mv -T "$tmpbin" "$sysbin" 2>/dev/null || rm -rf "$tmpbin"
+fi
+[[ "$SOS_MISSING" == 1 ]] && rm -f "$hd/bin/sos"
 
 c="${cmd//\/var\/tmp/$hd/var_tmp}"
 c="${c//\/etc\/rhosp-release/$hd/rhosp-release}"
 
 o="$(mktemp)" e="$(mktemp)"
 rc=0
-STUB_HOST="$host" STUB_SOS_DIR="$hd/var_tmp" PATH="$hd/bin:/usr/bin:/bin" \
+STUB_HOST="$host" STUB_SOS_DIR="$hd/var_tmp" PATH="$hd/bin:$sysbin" \
     bash -c "$c" > "$o" 2> "$e" < /dev/null || rc=$?
 sed "s#$hd/var_tmp#/var/tmp#g" "$o"
 sed "s#$hd/var_tmp#/var/tmp#g" "$e" >&2

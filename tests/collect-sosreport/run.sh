@@ -40,7 +40,7 @@ declare -A HOSTNAME_OF=(
 SECRET_TOKEN="FAKE-os-auth-token-9d1e7c"
 SECRET_PW="FakeOvercloudAdminPw-4c7b2a"
 
-SOS_EXACT="timeout --kill-after=120 3600 sudo sosreport --batch --all-logs --threads=1"
+SOS_EXACT="timeout --kill-after=120 3600 sudo sos report --batch --all-logs --threads=1"
 
 for tool in jq tmux flock setsid ssh-keygen; do
     command -v "$tool" >/dev/null 2>&1 || { echo "❌ $tool dibutuhkan untuk tes"; exit 1; }
@@ -288,7 +288,7 @@ test_fencing_basic() {
 
     ln_restore="$(call_line $'pcs\t.*property set stonith-enabled=true')"
     ln_scp="$(call_line $'^scp\t')"
-    ln_sos_last="$(last_call_line $'^sosreport\t')"
+    ln_sos_last="$(last_call_line $'^sos\t')"
     expect_true "restore setelah sosreport node cluster terakhir" test "$ln_restore" -gt "$ln_sos_last"
     expect_true "restore sebelum scp pertama" test "$ln_restore" -lt "$ln_scp"
 
@@ -298,6 +298,7 @@ test_fencing_basic() {
     expect_match "ringkasan: dipulihkan" "$(screen_text)" 'Sudah dipulihkan ke nilai awal \(true\)'
     ln_rest="$(call_line "^ssh"$'\t'"$P0"$'\t'"yes"$'\t'"$SOS_EXACT\$")"
     expect_true "perintah sosreport persis (tanpa --case-id)" test "$ln_rest" -gt 0
+    expect_true "binary sosreport (stub RHEL 9: deprecated, exit 1) tidak dipakai" no_call $'^sosreport\t'
     expect_eq "permission 600 di --dest" "$(stat -c %a "$(tsv 8 overcloud-computeiha-0)")" "600"
     expect_eq "file .sha256 juga 600" "$(stat -c %a "$(tsv 8 overcloud-computeiha-0).sha256")" "600"
     expect_eq "file laporan 600" "$(stat -c %a "$(report_file)")" "600"
@@ -485,11 +486,11 @@ test_precheck() {
     expect_eq "sudo gagal" "$(tsv 6 overcloud-computeiha-1)/$(tsv 12 overcloud-computeiha-1)" "SKIPPED/sudo failed"
     expect_eq "disk < 5 GiB, ditolak" "$(tsv 6 overcloud-computeiha-2)/$(tsv 12 overcloud-computeiha-2)" "SKIPPED/insufficient disk"
     expect_eq "disk < 1 GiB, langsung" "$(tsv 6 overcloud-controller-1)/$(tsv 12 overcloud-controller-1)" "SKIPPED/insufficient disk"
-    expect_eq "sosreport tidak ada" "$(tsv 6 overcloud-controller-2)/$(tsv 12 overcloud-controller-2)" "SKIPPED/sosreport not found"
+    expect_eq "sos tidak ada" "$(tsv 6 overcloud-controller-2)/$(tsv 12 overcloud-controller-2)" "SKIPPED/sos not found"
     expect_eq "node sehat tetap dikumpulkan" "$(tsv 6 overcloud-controller-0)" "SUCCESS"
     expect_match "versi node berbeda -> peringatan" "$(log_text)" 'WARN .*overcloud-controller-0: rhosp-release berbeda dengan undercloud'
     expect_true "< 1 GiB tidak ditanya" sh -c "! tmux -L cs-test-$$ capture-pane -p -J -t t -S -5000 | grep -q 'overcloud-controller-1: ruang kosong'"
-    expect_true "sosreport tidak dijalankan di node SKIPPED" no_call $'^sosreport\t'"$P1"
+    expect_true "sosreport tidak dijalankan di node SKIPPED" no_call $'^sos\t'"$P1"
     expect_match "ringkasan memuat alasan" "$(screen_text)" 'overcloud-computeiha-1 +ComputeInstanceHA .*SKIPPED .*sudo failed'
 }
 
@@ -613,7 +614,7 @@ test_cluster_membership() {
     rc="$(tmux_exit)"
     expect_eq "undercloud lokal SUCCESS" "$(tsv 6 undercloud)" "SUCCESS"
     expect_true "tanpa ssh sama sekali" no_call $'^ssh\t'
-    expect_true "sosreport lokal persis" grep -qxF "sosreport"$'\t'"local"$'\t'"--batch --all-logs --threads=1" "$WORK/state/calls.log"
+    expect_true "sos report lokal persis" grep -qxF "sos"$'\t'"local"$'\t'"report --batch --all-logs --threads=1" "$WORK/state/calls.log"
     expect_true "sudo chown lokal ke user sendiri" grep -qE $'^sudo\tlocal\tchown '"$(id -un):$(id -gn) -- " "$WORK/state/calls.log"
     expect_eq "permission 600" "$(stat -c %a "$(tsv 8 undercloud)")" "600"
     expect_true "file lokal di /var/tmp dihapus setelah disalin" test -z "$(ls "$WORK/state/local_var_tmp")"
@@ -747,8 +748,8 @@ test_phase_order() {
     expect_eq "exit code 0" "$rc" "0"
     expect_eq "node cluster gagal di tengah -> FAILED" "$(tsv 6 overcloud-computeiha-1)/$(tsv 12 overcloud-computeiha-1)" "FAILED/sosreport failed (rc=1)"
     expect_eq "stonith tetap dipulihkan" "$(stonith)" "true"
-    expect_true "undercloud (non-cluster) setelah pemulihan" test "$(call_line $'^sosreport\tlocal')" -gt "$(call_line $'^pcs\t.*\tproperty set stonith-enabled=true')"
-    expect_true "sosreport cluster sebelum pemulihan" test "$(last_call_line $'^sosreport\t172')" -lt "$(call_line $'^pcs\t.*\tproperty set stonith-enabled=true')"
+    expect_true "undercloud (non-cluster) setelah pemulihan" test "$(call_line $'^sos\tlocal')" -gt "$(call_line $'^pcs\t.*\tproperty set stonith-enabled=true')"
+    expect_true "sosreport cluster sebelum pemulihan" test "$(last_call_line $'^sos\t172')" -lt "$(call_line $'^pcs\t.*\tproperty set stonith-enabled=true')"
 }
 
 test_disable_verify_fail() {
@@ -761,7 +762,7 @@ test_disable_verify_fail() {
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
     expect_eq "node cluster ABORTED" "$(tsv 6 overcloud-computeiha-0)/$(tsv 12 overcloud-computeiha-0)" "ABORTED/fencing disable failed"
-    expect_true "tanpa sosreport di node cluster" no_call $'^sosreport\t'"$P0"
+    expect_true "tanpa sosreport di node cluster" no_call $'^sos\t'"$P0"
     expect_match "disable-fencing FAILED" "$(log_text)" 'action=disable-fencing result=FAILED'
     expect_eq "node non-cluster tetap jalan" "$(tsv 6 undercloud)" "SUCCESS"
     expect_eq "stonith true" "$(stonith)" "true"
@@ -951,7 +952,7 @@ test_dry_run() {
     expect_match "rencana: fencing akan di-disable" "$(screen_text)" 'Fencing +: .*AKAN DI-DISABLE.* \(nilai awal true\)'
     expect_match "rencana: perintah" "$(screen_text)" "Perintah +: $SOS_EXACT --case-id 0411"
     expect_true "tanpa property set/unset" no_call $'\tproperty (set|unset)'
-    expect_true "tanpa sosreport" no_call $'^sosreport\t'
+    expect_true "tanpa sosreport" no_call $'^sos\t'
     expect_true "tanpa chown" no_call 'chown'
     expect_true "tanpa scp" no_call $'^scp\t'
     expect_true "tanpa state file" test ! -e "$(state_file)"

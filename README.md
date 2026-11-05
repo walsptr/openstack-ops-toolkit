@@ -874,15 +874,19 @@ one confirmation, use `accept-new` (fingerprint logged). A changed host key is n
 the node is `SKIPPED (host key mismatch)`.
 
 **Pre-check** (one SSH call per node): `/etc/rhosp-release` (a different version than the
-undercloud is a warning), `rpm -q sos`, `sosreport` present, passwordless `sudo`, free space in
+undercloud is a warning), `rpm -q sos`, `sos` present, passwordless `sudo`, free space in
 `/var/tmp` (< 5 GiB: asked per node, < 1 GiB: `SKIPPED (insufficient disk)`), and the node clock
 (start time for the file search). Free space in `--dest` below 2 GiB per node is a warning.
 
 **Command on every node** (wrapped in `timeout`):
 
 ```
-sudo sosreport --batch --all-logs --threads=1 [--case-id ID]
+sudo sos report --batch --all-logs --threads=1 [--case-id ID]
 ```
+
+`sos report` is used instead of the old `sosreport` command: on RHEL 9 with sos ≥ 4.10,
+`/usr/sbin/sosreport` only prints `sosreport binary is deprecated, use 'sos report' instead`
+and exits 1.
 
 **When fencing is disabled** — only when a selected node is a member of the Pacemaker cluster:
 a Pacemaker node (controller) or a **Pacemaker remote node, which with Instance HA means every

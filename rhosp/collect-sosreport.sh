@@ -23,7 +23,7 @@ Kumpulkan sosreport dari node RHOSP 17.1. Dijalankan di undercloud sebagai
 user stack; node overcloud diakses lewat SSH (user dari inventory, default
 tripleo-admin). Perintah di setiap node:
 
-  sudo sosreport --batch --all-logs --threads=1 [--case-id ID]
+  sudo sos report --batch --all-logs --threads=1 [--case-id ID]
 
 Jika ada node terpilih yang anggota cluster Pacemaker (controller, atau
 compute Instance HA sebagai remote node), fencing (stonith-enabled)
@@ -35,7 +35,7 @@ Options:
   --node HOST            Node target (bisa diulang)
   --role ROLE            Semua node dalam role (bisa diulang)
   --include-undercloud   Ikut kumpulkan sosreport undercloud (dijalankan lokal)
-  --case-id ID           Tambahkan --case-id ID ke perintah sosreport. Tanpa opsi
+  --case-id ID           Tambahkan --case-id ID ke perintah sos report. Tanpa opsi
                          ini, Case ID ditanyakan (kosong = tanpa --case-id)
   --dest DIR             Direktori tujuan di undercloud (default /tmp, harus sudah ada)
   --parallel N           Jumlah node yang dikumpulkan bersamaan (default 1)
@@ -335,7 +335,7 @@ load_nodes() {
 REMOTE_PRECHECK='echo __OSOPS_PRECHECK__
 printf "release=%s\n" "$(head -n 1 /etc/rhosp-release 2>/dev/null)"
 printf "sos_rpm=%s\n" "$(rpm -q sos 2>/dev/null | head -n 1)"
-printf "sosreport=%s\n" "$(command -v sosreport 2>/dev/null)"
+printf "sos=%s\n" "$(command -v sos 2>/dev/null)"
 if sudo -n true >/dev/null 2>&1; then echo sudo=ok; else echo sudo=fail; fi
 printf "free_kb=%s\n" "$(df -Pk /var/tmp 2>/dev/null | awk "NR==2 {print \$4}")"
 printf "epoch=%s\n" "$(date +%s)"'
@@ -349,7 +349,7 @@ parse_precheck() {
             __OSOPS_PRECHECK__) PC_OK=1 ;;
             release=*)   PC_RELEASE="$(trim "${line#release=}")" ;;
             sos_rpm=*)   PC_RPM="${line#sos_rpm=}" ;;
-            sosreport=*) PC_SOS="${line#sosreport=}" ;;
+            sos=*)       PC_SOS="${line#sos=}" ;;
             sudo=*)      PC_SUDO="${line#sudo=}" ;;
             free_kb=*)   PC_FREE="${line#free_kb=}" ;;
             epoch=*)     PC_EPOCH="${line#epoch=}" ;;
@@ -363,7 +363,7 @@ precheck_local() {
         echo __OSOPS_PRECHECK__
         printf 'release=%s\n' "$UC_RELEASE"
         printf 'sos_rpm=%s\n' "$(rpm -q sos 2>/dev/null | head -n 1)"
-        printf 'sosreport=%s\n' "$(command -v sosreport 2>/dev/null)"
+        printf 'sos=%s\n' "$(command -v sos 2>/dev/null)"
         if sudo -n true >/dev/null 2>&1; then echo sudo=ok; else echo sudo=fail; fi
         printf 'free_kb=%s\n' "$(df -Pk "$LOCAL_SOS_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
         printf 'epoch=%s\n' "$(date +%s)"
@@ -400,7 +400,7 @@ precheck_node() {
     N_FREE_KB[i]="$PC_FREE"
 
     if [[ -z "$PC_SOS" ]]; then
-        set_result "$i" SKIPPED "sosreport not found"
+        set_result "$i" SKIPPED "sos not found"
     elif [[ "$PC_SUDO" != "ok" ]]; then
         set_result "$i" SKIPPED "sudo failed"
     elif ! is_uint "$PC_EPOCH"; then
@@ -410,7 +410,7 @@ precheck_node() {
     fi
 
     log_event PRECHECK "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" "rhosp_release=${PC_RELEASE:--}" \
-        "sos_rpm=${PC_RPM:--}" "sosreport=${PC_SOS:--}" "sudo=${PC_SUDO:--}" \
+        "sos_rpm=${PC_RPM:--}" "sos=${PC_SOS:--}" "sudo=${PC_SUDO:--}" \
         "free_kb=${PC_FREE:--}" "epoch=${PC_EPOCH:--}" "result=${N_RESULT[$i]:-OK}" "reason=${N_MSG[$i]:--}"
 
     if (( ! N_LOCAL[i] )) && [[ -n "$PC_RELEASE" && "$PC_RELEASE" != "$UC_RELEASE" ]]; then
@@ -1093,7 +1093,7 @@ disable_fencing() {
 # ============================================================
 
 sos_remote_cmd() {
-    local cmd="timeout --kill-after=120 $(( TIMEOUT_MIN * 60 )) sudo sosreport --batch --all-logs --threads=1"
+    local cmd="timeout --kill-after=120 $(( TIMEOUT_MIN * 60 )) sudo sos report --batch --all-logs --threads=1"
     [[ -n "$CASE_ID" ]] && cmd+=" --case-id $CASE_ID"
     printf '%s' "$cmd"
 }
