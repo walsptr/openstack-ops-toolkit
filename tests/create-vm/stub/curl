@@ -1,10 +1,12 @@
 #!/bin/bash
-# Stub curl untuk tests/create-vm (OSOPS_CURL): Glance GET /v2/images.
+# Stub curl untuk tests/create-vm (OSOPS_CURL): Glance GET /v2/images,
+# berhalaman seperti Glance v2 (field top-level "next" dengan marker).
 # Token dibaca dari config di stdin (-K -), tidak dari argumen.
 S="${STUB_STATE:?}"
 FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
 IMAGES="$FIX/images.json"
 [[ -f "${STUB_STATE:?}/images.json" ]] && IMAGES="$STUB_STATE/images.json"
+PAGE=4
 cfg="$(cat)"
 out="" url=""
 while (( $# > 0 )); do
@@ -21,6 +23,16 @@ if [[ "$(cat "$S/scen/api" 2>/dev/null)" == fail ]]; then
     exit 22
 fi
 case "$url" in
-    */v2/images\?*) jq '{images: [ .[] | select(.status == "active") ]}' "$IMAGES" > "$out" ;;
+    */v2/images\?*)
+        marker="$(sed -n 's/.*[?&]marker=\([^&]*\).*/\1/p' <<< "$url")"
+        jq --arg m "$marker" --argjson n "$PAGE" '
+            [ .[] | select(.status == "active") ] as $all
+            | (if $m == "" then 0 else ([ $all[] | .id ] | index($m)) + 1 end) as $start
+            | $all[$start:$start + $n] as $page
+            | { images: $page }
+              + (if $start + $n < ($all | length)
+                 then { next: "/v2/images?marker=\($page[-1].id)&limit=\($n)&status=active" } else {} end)' \
+            "$IMAGES" > "$out"
+        ;;
     *) echo "curl: (22) 404" >&2; exit 22 ;;
 esac

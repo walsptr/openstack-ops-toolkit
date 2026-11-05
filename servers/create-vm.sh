@@ -124,7 +124,7 @@ WORK_DIR=""
 SCOPE_PROJECT_ID="" PICK_PROJECT_ID="" RESOLVED_PROJECT_ID="" PROJECT_ID="" PROJECT_NAME="" PROJECT_DOMAIN=""
 IMG_ID="" IMG_NAME="" IMG_DISTRO="" IMG_MIN_DISK=0 IMG_MIN_RAM=0 IMG_SIZE=0 IMG_VSIZE=0
 FLV_ID="" FLV_NAME="" FLV_RAM=0 FLV_DISK=0 FLV_VCPU=0
-BOOT="volume" VOL_SIZE=0 VOL_TYPE="" DELETE_VOL=1
+BOOT="volume" VOL_SIZE=0 VOL_TYPE="" DEF_VTYPE="" DELETE_VOL=1
 NET_IDS=() NET_NAMES=()
 SG_IDS=() SG_NAMES=()
 KEY_MODE="none"     # none | existing | create
@@ -811,6 +811,7 @@ select_volume_plan() {
     [[ -z "$reason" ]] || die "--volume-size terlalu kecil: $reason."
 
     deftype="$(os_cli volume type list --default -f json 2>/dev/null | jq -r 'if type == "array" then (.[0].Name // .[0].name // empty) else (.Name // .name // empty) end' 2>/dev/null)" || deftype=""
+    DEF_VTYPE="$deftype"
     if [[ -n "$OPT_VOL_TYPE" ]]; then
         VOL_TYPE="$OPT_VOL_TYPE"
         if json="$(os_cli volume type list -f json 2>/dev/null)"; then
@@ -1364,7 +1365,7 @@ show_summary() {
     printf '  %-18s %s\n' "Image" "$IMG_NAME ($IMG_ID), distro $IMG_DISTRO"
     printf '  %-18s %s\n' "Flavor" "$FLV_NAME ($FLV_VCPU vCPU, $FLV_RAM MB, $FLV_DISK GB)"
     if [[ "$BOOT" == volume ]]; then
-        printf '  %-18s %s\n' "Boot" "VOLUME ${VOL_SIZE} GB, type ${VOL_TYPE:-default}, nama <vm>-root (jalur $BOOT_PATH)"
+        printf '  %-18s %s\n' "Boot" "VOLUME ${VOL_SIZE} GB, type ${VOL_TYPE:-default${DEF_VTYPE:+ ($DEF_VTYPE)}}, nama <vm>-root (jalur $BOOT_PATH)"
         printf '  %-18s %s\n' "Delete on terminate" "$( (( DELETE_VOL )) && echo 'YA — volume DIHAPUS saat VM dihapus' || echo 'TIDAK — volume TETAP ADA saat VM dihapus')"
         if [[ "$BOOT_PATH" == B ]] && (( DELETE_VOL )) && { (( ! CAP_VOL_UPDATE )) || ! mv_ge "$COMPUTE_API_VERSION" "$MV_VOL_UPDATE"; }; then
             printf '  %-18s %s\n' "" "${C_YELLOW}⚠️  CLI/cloud tidak mendukung pengaturan delete on terminate: volume TIDAK akan terhapus otomatis${C_RESET}"

@@ -222,6 +222,8 @@ test_images() {
     expect_match "distro dari os_distro (app-golden => ubuntu)" "$lst" 'app-golden +ubuntu'
     expect_match "distro dari nama 'Red Hat' => rhel" "$lst" 'Red Hat Enterprise Linux 8 +rhel'
     expect_match "Glance API dipakai (token lewat stdin)" "$(calls)" 'curl http://glance.stub:9292/v2/images\?status=active.*token_in_stdin=yes'
+    expect_true "pagination Glance (next + marker) diikuti" test "$(calls | grep -c 'curl http://glance.stub:9292/v2/images?marker=')" -ge 1
+    expect_match "image dari halaman terakhir ikut terdaftar" "$lst" 'Red Hat Enterprise Linux 8'
     expect_match "user default rhel: cloud-user" "$(screen_text)" 'Username +cloud-user'
 
     begin "image_cli_fallback"

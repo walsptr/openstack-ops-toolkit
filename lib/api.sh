@@ -19,7 +19,8 @@
 #   api_get URL OUT              GET satu URL ke file OUT
 #   api_collect PATH QUERY KEY OUT
 #                                GET API_ENDPOINT/PATH?QUERY, ikuti pagination
-#                                (KEY_links rel=next), gabungkan array KEY ke OUT
+#                                (KEY_links rel=next, atau "next" gaya Glance v2),
+#                                gabungkan array KEY ke OUT
 #
 # Variabel: API_ENDPOINT, API_REASON, API_HEADERS (array header tambahan,
 # mis. "OpenStack-API-Version: compute 2.47"), API_CURL (default
@@ -157,7 +158,8 @@ api_collect() {
         page=$(( page + 1 ))
         (( page <= 100000 )) || { API_REASON="pagination tidak berhenti"; return 1; }
         api_get "$url" "$dir/$page.json" || return 1
-        if ! got="$(jq -r --arg k "$key" '(.[$k] | length), ([ (.[$k + "_links"] // [])[] | select(.rel == "next") | .href ][0] // "")' \
+        # Link halaman berikut: Nova/Neutron "<key>_links" (rel=next), Glance v2 "next"
+        if ! got="$(jq -r --arg k "$key" '(.[$k] | length), ([ (.[$k + "_links"] // [])[] | select(.rel == "next") | .href ][0] // .next // "")' \
                 "$dir/$page.json" 2>/dev/null)"; then
             API_REASON="respons API tidak valid (bukan JSON $key)"
             return 1
