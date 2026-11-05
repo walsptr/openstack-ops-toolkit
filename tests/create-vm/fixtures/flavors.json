@@ -1,0 +1,6 @@
+[
+  {"ID": "f1", "Name": "m1.tiny", "RAM": 512, "Disk": 1, "Ephemeral": 0, "VCPUs": 1, "Is Public": true},
+  {"ID": "f2", "Name": "m1.small", "RAM": 2048, "Disk": 20, "Ephemeral": 0, "VCPUs": 1, "Is Public": true},
+  {"ID": "f3", "Name": "m1.medium", "RAM": 4096, "Disk": 40, "Ephemeral": 0, "VCPUs": 2, "Is Public": true},
+  {"ID": "f4", "Name": "m1.zero", "RAM": 2048, "Disk": 0, "Ephemeral": 0, "VCPUs": 1, "Is Public": true}
+]

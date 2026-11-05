@@ -1,0 +1,5 @@
+[
+  {"ID": "sg-default", "Name": "default", "Description": "Default", "Project": "@PROJECT@"},
+  {"ID": "sg-web", "Name": "web", "Description": "HTTP only", "Project": "@PROJECT@"},
+  {"ID": "sg-other", "Name": "default", "Description": "Default", "Project": "f0000000000000000000000000000009"}
+]

@@ -1,0 +1,7 @@
+[
+  {"Name": "maxTotalInstances", "Value": 10}, {"Name": "totalInstancesUsed", "Value": 2},
+  {"Name": "maxTotalCores", "Value": 20}, {"Name": "totalCoresUsed", "Value": 4},
+  {"Name": "maxTotalRAMSize", "Value": 51200}, {"Name": "totalRAMUsed", "Value": 8192},
+  {"Name": "maxTotalVolumes", "Value": 10}, {"Name": "totalVolumesUsed", "Value": 1},
+  {"Name": "maxTotalVolumeGigabytes", "Value": 1000}, {"Name": "totalGigabytesUsed", "Value": 50}
+]

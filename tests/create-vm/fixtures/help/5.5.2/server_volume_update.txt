@@ -1,0 +1,18 @@
+usage: openstack server volume update [-h]
+                                      [--delete-on-termination | --preserve-on-termination]
+                                      server volume
+
+Update a volume attachment on the server.
+
+positional arguments:
+  server                Server to update volume for (name or ID)
+  volume                Volume (ID)
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --delete-on-termination
+                        Delete the volume when the server is destroyed
+                        (supported by --os-compute-api-version 2.85 or above)
+  --preserve-on-termination
+                        Preserve the volume when the server is destroyed
+                        (supported by --os-compute-api-version 2.85 or above)

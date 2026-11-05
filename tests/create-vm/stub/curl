@@ -1,0 +1,26 @@
+#!/bin/bash
+# Stub curl untuk tests/create-vm (OSOPS_CURL): Glance GET /v2/images.
+# Token dibaca dari config di stdin (-K -), tidak dari argumen.
+S="${STUB_STATE:?}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+IMAGES="$FIX/images.json"
+[[ -f "${STUB_STATE:?}/images.json" ]] && IMAGES="$STUB_STATE/images.json"
+cfg="$(cat)"
+out="" url=""
+while (( $# > 0 )); do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        -K|--connect-timeout|--max-time|--cacert|--cert|--key) shift 2 ;;
+        -*) shift ;;
+        *) url="$1"; shift ;;
+    esac
+done
+printf 'curl %s token_in_stdin=%s\n' "$url" "$([[ "$cfg" == *X-Auth-Token* ]] && echo yes || echo no)" >> "$S/calls.log"
+if [[ "$(cat "$S/scen/api" 2>/dev/null)" == fail ]]; then
+    echo "curl: (22) The requested URL returned error: 503" >&2
+    exit 22
+fi
+case "$url" in
+    */v2/images\?*) jq '{images: [ .[] | select(.status == "active") ]}' "$IMAGES" > "$out" ;;
+    *) echo "curl: (22) 404" >&2; exit 22 ;;
+esac

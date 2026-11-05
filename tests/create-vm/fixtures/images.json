@@ -1,0 +1,12 @@
+[
+  {"id": "11111111-0000-4000-8000-000000000001", "name": "RHEL-9.4-x86_64", "status": "active", "os_distro": "rhel", "min_disk": 10, "min_ram": 1024, "size": 1073741824, "virtual_size": 10737418240, "visibility": "public", "created_at": "2026-01-10T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000002", "name": "ubuntu-22.04-server", "status": "active", "min_disk": 0, "min_ram": 0, "size": 700000000, "virtual_size": 2361393152, "visibility": "public", "created_at": "2026-01-11T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000003", "name": "debian-12-genericcloud", "status": "active", "min_disk": 0, "min_ram": 0, "size": 400000000, "virtual_size": 2147483648, "visibility": "shared", "created_at": "2026-01-12T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000004", "name": "cirros-0.6.2", "status": "active", "min_disk": 0, "min_ram": 0, "size": 21430272, "virtual_size": 117440512, "visibility": "public", "created_at": "2026-01-13T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000005", "name": "CentOS-Stream-9", "status": "active", "min_disk": 0, "min_ram": 0, "size": 900000000, "virtual_size": 10737418240, "visibility": "private", "created_at": "2026-01-14T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000006", "name": "app-golden", "status": "active", "os_distro": "ubuntu", "min_disk": 0, "min_ram": 0, "size": 800000000, "virtual_size": 5368709120, "visibility": "private", "created_at": "2026-01-15T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000007", "name": "Red Hat Enterprise Linux 8", "status": "active", "min_disk": 20, "min_ram": 2048, "size": 900000000, "virtual_size": 10737418240, "visibility": "public", "created_at": "2026-01-16T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000008", "name": "windows-2022", "status": "active", "os_distro": "windows", "min_disk": 40, "min_ram": 4096, "size": 9000000000, "virtual_size": 42949672960, "visibility": "public", "created_at": "2026-01-17T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-000000000009", "name": "fedora-40", "status": "active", "os_distro": "fedora", "min_disk": 0, "min_ram": 0, "size": 500000000, "virtual_size": 5368709120, "visibility": "public", "created_at": "2026-01-18T10:00:00Z"},
+  {"id": "11111111-0000-4000-8000-00000000000a", "name": "rhel-queued", "status": "queued", "os_distro": "rhel", "min_disk": 0, "min_ram": 0, "size": 0, "virtual_size": 0, "visibility": "private", "created_at": "2026-01-19T10:00:00Z"}
+]

@@ -1,0 +1,257 @@
+usage: openstack server create [-h] [-f {json,shell,table,value,yaml}]
+                               [-c COLUMN] [--noindent] [--prefix PREFIX]
+                               [--max-width <integer>] [--fit-width]
+                               [--print-empty] --flavor <flavor>
+                               [--image <image> |
+                               --image-property <key=value> |
+                               --volume <volume> | --snapshot <snapshot>]
+                               [--boot-from-volume <volume-size>]
+                               [--block-device-mapping <dev-name=mapping>]
+                               [--block-device <block-device>] [--swap <swap>]
+                               [--ephemeral <size=size[,format=format]>]
+                               [--network <network>] [--port <port>]
+                               [--no-network] [--auto-network]
+                               [--nic <net-id=net-uuid,port-id=port-uuid,v4-fixed-ip=ip-addr,v6-fixed-ip=ip-addr,tag=tag,auto,none>]
+                               [--password <password>]
+                               [--security-group <security-group>]
+                               [--key-name <key-name>]
+                               [--property <key=value>]
+                               [--file <dest-filename=source-filename>]
+                               [--user-data <user-data>]
+                               [--description <description>]
+                               [--availability-zone <zone-name>]
+                               [--host <host>]
+                               [--hypervisor-hostname <hypervisor-hostname>]
+                               [--server-group <server-group>]
+                               [--hint <key=value>] [--use-config-drive |
+                               --no-config-drive |
+                               --config-drive <config-drive-volume>|True]
+                               [--min <count>] [--max <count>] [--tag <tag>]
+                               [--hostname <hostname>] [--wait]
+                               [--trusted-image-cert <trusted-cert-id>]
+                               <server-name>
+
+Create a new server
+
+positional arguments:
+  <server-name>         New server name
+
+options:
+  -h, --help            show this help message and exit
+  --flavor <flavor>     Create server with this flavor (name or ID)
+  --image <image>       Create server boot disk from this image (name or ID)
+  --image-property <key=value>
+                        Create server using the image that matches the
+                        specified property. Property must match exactly one
+                        property.
+  --volume <volume>     Create server using this volume as the boot disk (name
+                        or ID)
+                        This option automatically creates a block device
+                        mapping with a boot index of 0. On many hypervisors
+                        (libvirt/kvm for example) this will be device vda. Do
+                        not create a duplicate mapping using --block-device-
+                        mapping for this volume.
+  --snapshot <snapshot>
+                        Create server using this snapshot as the boot disk
+                        (name or ID)
+                        This option automatically creates a block device
+                        mapping with a boot index of 0. On many hypervisors
+                        (libvirt/kvm for example) this will be device vda. Do
+                        not create a duplicate mapping using --block-device-
+                        mapping for this volume.
+  --boot-from-volume <volume-size>
+                        When used in conjunction with the ``--image`` or
+                        ``--image-property`` option, this option automatically
+                        creates a block device mapping with a boot index of 0
+                        and tells the compute service to create a volume of
+                        the given size (in GB) from the specified image and
+                        use it as the root disk of the server. The root volume
+                        will not be deleted when the server is deleted. This
+                        option is mutually exclusive with the ``--volume`` and
+                        ``--snapshot`` options.
+  --block-device-mapping <dev-name=mapping>
+                        **Deprecated** Create a block device on the server.
+                        Block device mapping in the format
+                        <dev-name>=<id>:<type>:<size(GB)>:<delete-on-
+                        terminate>
+                        <dev-name>: block device name, like: vdb, xvdc
+                        (required)
+                        <id>: Name or ID of the volume, volume snapshot or
+                        image (required)
+                        <type>: volume, snapshot or image; default: volume
+                        (optional)
+                        <size(GB)>: volume size if create from image or
+                        snapshot (optional)
+                        <delete-on-terminate>: true or false; default: false
+                        (optional)
+                        Replaced by --block-device
+  --block-device <block-device>
+                        Create a block device on the server.
+                        Either a path to a JSON file or a CSV-serialized
+                        string describing the block device mapping.
+                        The following keys are accepted for both:
+                        uuid=<uuid>: UUID of the volume, snapshot or ID
+                        (required if using source image, snapshot or volume),
+                        source_type=<source_type>: source type (one of: image,
+                        snapshot, volume, blank),
+                        destination_type=<destination_type>: destination type
+                        (one of: volume, local) (optional),
+                        disk_bus=<disk_bus>: device bus (one of: uml, lxc,
+                        virtio, ...) (optional),
+                        device_type=<device_type>: device type (one of: disk,
+                        cdrom, etc. (optional),
+                        device_name=<device_name>: name of the device
+                        (optional),
+                        volume_size=<volume_size>: size of the block device in
+                        MiB (for swap) or GiB (for everything else)
+                        (optional),
+                        guest_format=<guest_format>: format of device
+                        (optional),
+                        boot_index=<boot_index>: index of disk used to order
+                        boot disk (required for volume-backed instances),
+                        delete_on_termination=<true|false>: whether to delete
+                        the volume upon deletion of server (optional),
+                        tag=<tag>: device metadata tag (optional),
+                        volume_type=<volume_type>: type of volume to create
+                        (name or ID) when source if blank, image or snapshot
+                        and dest is volume (optional)
+  --swap <swap>         Create and attach a local swap block device of
+                        <swap_size> MiB.
+  --ephemeral <size=size[,format=format]>
+                        Create and attach a local ephemeral block device of
+                        <size> GiB and format it to <format>.
+  --network <network>   Create a NIC on the server and connect it to network.
+                        Specify option multiple times to create multiple NICs.
+                        This is a wrapper for the '--nic net-id=<network>'
+                        parameter that provides simple syntax for the standard
+                        use case of connecting a new server to a given
+                        network. For more advanced use cases, refer to the '--
+                        nic' parameter.
+  --port <port>         Create a NIC on the server and connect it to port.
+                        Specify option multiple times to create multiple NICs.
+                        This is a wrapper for the '--nic port-id=<port>'
+                        parameter that provides simple syntax for the standard
+                        use case of connecting a new server to a given port.
+                        For more advanced use cases, refer to the '--nic'
+                        parameter.
+  --no-network          Do not attach a network to the server. This is a
+                        wrapper for the '--nic none' option that provides a
+                        simple syntax for disabling network connectivity for a
+                        new server. For more advanced use cases, refer to the
+                        '--nic' parameter. (supported by --os-compute-api-
+                        version 2.37 or above)
+  --auto-network        Automatically allocate a network to the server. This
+                        is the default network allocation policy. This is a
+                        wrapper for the '--nic auto' option that provides a
+                        simple syntax for enabling automatic configuration of
+                        network connectivity for a new server. For more
+                        advanced use cases, refer to the '--nic' parameter.
+                        (supported by --os-compute-api-version 2.37 or above)
+  --nic <net-id=net-uuid,port-id=port-uuid,v4-fixed-ip=ip-addr,v6-fixed-ip=ip-addr,tag=tag,auto,none>
+                        Create a NIC on the server.
+                        NIC in the format:
+                        net-id=<net-uuid>: attach NIC to network with this
+                        UUID,
+                        port-id=<port-uuid>: attach NIC to port with this
+                        UUID,
+                        v4-fixed-ip=<ip-addr>: IPv4 fixed address for NIC
+                        (optional),
+                        v6-fixed-ip=<ip-addr>: IPv6 fixed address for NIC
+                        (optional),
+                        tag: interface metadata tag (optional) (supported by
+                        --os-compute-api-version 2.43 or above),
+                        none: (v2.37+) no network is attached,
+                        auto: (v2.37+) the compute service will automatically
+                        allocate a network.
+                        Specify option multiple times to create multiple NICs.
+                        Specifying a --nic of auto or none cannot be used with
+                        any other --nic value.
+                        Either net-id or port-id must be provided, but not
+                        both.
+  --password <password>
+                        Set the password to this server. This option requires
+                        cloud support.
+  --security-group <security-group>
+                        Security group to assign to this server (name or ID)
+                        (repeat option to set multiple groups)
+  --key-name <key-name>
+                        Keypair to inject into this server
+  --property <key=value>
+                        Set a property on this server (repeat option to set
+                        multiple values)
+  --file <dest-filename=source-filename>
+                        File(s) to inject into image before boot (repeat
+                        option to set multiple files)(supported by --os-
+                        compute-api-version 2.57 or below)
+  --user-data <user-data>
+                        User data file to serve from the metadata server
+  --description <description>
+                        Set description for the server (supported by --os-
+                        compute-api-version 2.19 or above)
+  --availability-zone <zone-name>
+                        Select an availability zone for the server. Host and
+                        node are optional parameters. Availability zone in the
+                        format <zone-name>:<host-name>:<node-name>, <zone-
+                        name>::<node-name>, <zone-name>:<host-name> or <zone-
+                        name>
+  --host <host>         Requested host to create servers. (admin only)
+                        (supported by --os-compute-api-version 2.74 or above)
+  --hypervisor-hostname <hypervisor-hostname>
+                        Requested hypervisor hostname to create servers.
+                        (admin only) (supported by --os-compute-api-version
+                        2.74 or above)
+  --server-group <server-group>
+                        Server group to create the server within (this is an
+                        alias for '--hint group=<server-group-id>')
+  --hint <key=value>    Hints for the scheduler
+  --use-config-drive    Enable config drive.
+  --no-config-drive     Disable config drive.
+  --config-drive <config-drive-volume>|True
+                        **Deprecated** Use specified volume as the config
+                        drive, or 'True' to use an ephemeral drive. Replaced
+                        by '--use-config-drive'.
+  --min <count>         Minimum number of servers to launch (default=1)
+  --max <count>         Maximum number of servers to launch (default=1)
+  --tag <tag>           Tags for the server. Specify multiple times to add
+                        multiple tags. (supported by --os-compute-api-version
+                        2.52 or above)
+  --hostname <hostname>
+                        Hostname configured for the server in the metadata
+                        service. If unset, a hostname will be automatically
+                        generated from the server name. A utility such as
+                        cloud-init is required to propagate the hostname in
+                        the metadata service to the guest OS itself.
+                        (supported by --os-compute-api-version 2.90 or above)
+  --wait                Wait for build to complete
+  --trusted-image-cert <trusted-cert-id>
+                        Trusted image certificate IDs used to validate
+                        certificates during the image signature verification
+                        process. May be specified multiple times to pass
+                        multiple trusted image certificate IDs. (supported by
+                        --os-compute-api-version 2.63 or above)
+
+output formatters:
+  output formatter options
+
+  -f, --format {json,shell,table,value,yaml}
+                        the output format, defaults to table
+  -c, --column COLUMN   specify the column(s) to include, can be repeated to
+                        show multiple columns
+
+json formatter:
+  --noindent            whether to disable indenting the JSON
+
+shell formatter:
+  a format a UNIX shell can parse (variable="value")
+
+  --prefix PREFIX       add a prefix to all variable names
+
+table formatter:
+  --max-width <integer>
+                        Maximum display width, <1 to disable. You can also use
+                        the CLIFF_MAX_TERM_WIDTH environment variable, but the
+                        parameter takes precedence.
+  --fit-width           Fit the table to the display width. Implied if --max-
+                        width greater than 0. Set the environment variable
+                        CLIFF_FIT_WIDTH=1 to always enable
+  --print-empty         Print empty table if there is no data to show.

@@ -1,0 +1,6 @@
+[
+  {"ID": "r1", "IP Protocol": "icmp", "Ethertype": "IPv4", "IP Range": "0.0.0.0/0", "Port Range": "", "Direction": "ingress", "Remote Security Group": null, "Security Group": "sg-default"},
+  {"ID": "r2", "IP Protocol": "tcp", "Ethertype": "IPv4", "IP Range": "0.0.0.0/0", "Port Range": "22:22", "Direction": "ingress", "Remote Security Group": null, "Security Group": "sg-default"},
+  {"ID": "r3", "IP Protocol": null, "Ethertype": "IPv4", "IP Range": "0.0.0.0/0", "Port Range": "", "Direction": "egress", "Remote Security Group": null, "Security Group": "sg-default"},
+  {"ID": "r4", "IP Protocol": "tcp", "Ethertype": "IPv4", "IP Range": "0.0.0.0/0", "Port Range": "80:80", "Direction": "ingress", "Remote Security Group": null, "Security Group": "sg-web"}
+]

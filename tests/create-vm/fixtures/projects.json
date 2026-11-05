@@ -1,0 +1,7 @@
+[
+  {"ID": "a0000000000000000000000000000001", "Name": "admin", "Domain ID": "default", "my": true},
+  {"ID": "b0000000000000000000000000000002", "Name": "dev", "Domain ID": "default", "my": true},
+  {"ID": "c0000000000000000000000000000003", "Name": "norole", "Domain ID": "default", "my": false},
+  {"ID": "d0000000000000000000000000000004", "Name": "dup", "Domain ID": "d1", "my": false},
+  {"ID": "e0000000000000000000000000000005", "Name": "dup", "Domain ID": "d2", "my": false}
+]

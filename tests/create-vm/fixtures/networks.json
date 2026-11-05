@@ -1,0 +1,6 @@
+[
+  {"ID": "n1000000-0000-4000-8000-000000000001", "Name": "private", "Status": "ACTIVE", "Project": "@PROJECT@", "State": "UP", "Shared": false, "Subnets": ["s1"], "Router Type": "Internal"},
+  {"ID": "n1000000-0000-4000-8000-000000000002", "Name": "shared-net", "Status": "ACTIVE", "Project": "a0000000000000000000000000000001", "State": "UP", "Shared": true, "Subnets": ["s2"], "Router Type": "Internal"},
+  {"ID": "n1000000-0000-4000-8000-000000000003", "Name": "public", "Status": "ACTIVE", "Project": "a0000000000000000000000000000001", "State": "UP", "Shared": false, "Subnets": ["s3"], "Router Type": "External"},
+  {"ID": "n1000000-0000-4000-8000-000000000004", "Name": "other-private", "Status": "ACTIVE", "Project": "f0000000000000000000000000000009", "State": "UP", "Shared": false, "Subnets": ["s4"], "Router Type": "Internal"}
+]

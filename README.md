@@ -206,6 +206,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
 | Search Container Logs | rhosp | `rhosp/search-container-logs.sh` | no | Search a keyword in OpenStack container logs across RHOSP nodes |
 | View Container Logs | rhosp | `rhosp/view-container-logs.sh` | no | Search and read OpenStack container logs on RHOSP nodes (tail, follow) |
+| Create VM | servers | `servers/create-vm.sh` | yes | Create an instance (boot from image or volume) with distro-aware cloud-init |
 | Instances Information | servers | `servers/get-instance-info.sh` | no | Show instance name, project, and domain for an instance ID (or a list from a file, saved as CSV in /tmp) |
 | List Instances by Host | servers | `servers/list-instances-by-host.sh` | no | Export instances on selected compute hosts to CSV (for maintenance notice) |
 | Live Migrate Instances | servers | `servers/live-migrate.sh` | yes | Live migrate a list of instances to a target compute host with monitoring |
@@ -269,6 +270,135 @@ warning, refused below `2.30`) and `OSOPS_OS_CMD` (OpenStack CLI command, defaul
 only changes how the CLI is invoked. The `OS_*` credentials loaded by the toolkit are **not**
 passed into the pod; the pod must have its own credentials (`clouds.yaml` / environment). Not yet
 tested against RHOSO.
+
+### Create VM (`servers/create-vm.sh`)
+
+Creates one or more instances. By default the VM boots from a new volume; booting from the image
+is also possible. cloud-init is set up for the image's distribution. Modifies resources: **yes**
+(keypair, volume, server, floating IP). It works with upstream OpenStack and with RHOSP 17.1
+(python-openstackclient 5.5.2). CLI options and the compute microversion are detected at runtime,
+never assumed. A terminal is required, and there is always one `y/N` confirmation.
+
+```bash
+# From the TUI: no arguments, everything is asked (pickers with search)
+servers/create-vm.sh
+
+# Directly
+servers/create-vm.sh --project dev --name web --image RHEL-9.4 --flavor m1.small \
+    --network private --security-group default --public-key ~/.ssh/id_ed25519.pub
+servers/create-vm.sh --name test --image cirros-0.6.2 --flavor m1.tiny --boot image --no-key
+servers/create-vm.sh --name app --count 3 --volume-size 40 --volume-type ssd --keep-volume --dry-run
+servers/create-vm.sh --name db --host compute-3.example.com --floating-ip public
+```
+
+| Option | Description |
+|---|---|
+| `--project`, `--project-domain` | Target project (name or ID; add the domain when a name exists in several domains) |
+| `--name`, `--count N` | Name; with `--count` > 1 the VMs are `<name>-1`, `<name>-2`, ... (default 1) |
+| `--image`, `--distro D` | Image, and an override of the detected distribution (`rhel`, `centos`, `ubuntu`, `debian`, `cirros`) |
+| `--flavor` | Flavor (RAM ≥ image `min_ram`; when booting from the image, disk ≥ `min_disk`) |
+| `--boot volume\|image` | Default `volume` |
+| `--volume-size GB`, `--volume-type T` | Root volume size and type (default: the Cinder default type) |
+| `--delete-volume-on-terminate` / `--keep-volume` | Delete the root volume together with the VM (default: delete) |
+| `--network`, `--security-group` | Repeatable. The order of `--network` is the NIC order |
+| `--key-name`, `--public-key PATH`, `--no-key` | Key selection (see below) |
+| `--username`, `--no-password` | Override the distribution's default user; log in with the key only |
+| `--host`, `--availability-zone` | Target compute (admin) and zone |
+| `--floating-ip NET` | Allocate a floating IP from this external network and attach it once the VM is `ACTIVE` |
+| `--timeout MIN` (15), `--dry-run` | Wait limit per VM/volume; dry-run runs every step up to the summary and creates nothing |
+
+**Project and scope**
+- The project from the RC file is shown (name, ID, domain), and you can pick another one from
+  `project list --my-projects`. An admin can also list all projects, but still needs a role in
+  the chosen project.
+- The scope changes **only inside the script process**: `OS_PROJECT_ID` is set, and
+  `OS_PROJECT_NAME`, `OS_TENANT_*`, and `OS_PROJECT_DOMAIN_*` are unset. Every CLI call also gets
+  `--os-project-id`, because with `OS_CLOUD` (`clouds.yaml`, used by the RHOSP 17.1
+  `overcloudrc`) environment variables can be ignored, while CLI options always win.
+- The scope is verified with `token issue`. Without a role in the project this fails: the script
+  says so, suggests `identity/assign-user-to-project.sh`, and returns to the RC project.
+
+**Images**
+- Only `active` images are listed, and only when the name or the `os_distro` property matches
+  `rhel`, `redhat`, `red hat`, `centos`, `ubuntu`, `debian`, or `cirros` (case-insensitive).
+- The distribution is detected from `os_distro` first, then from the name.
+- Metadata (`os_distro`, `min_disk`, `min_ram`, sizes) is read in one paginated Glance API call
+  (`lib/api.sh`). Without `curl` or API access, the script falls back to `image show` per image,
+  in parallel.
+
+**Default user per distribution**
+
+| Distribution | User |
+|---|---|
+| debian | `debian` |
+| ubuntu | `ubuntu` |
+| rhel | `cloud-user` |
+| centos | `cloud-user` (old CentOS 7 images use `centos`: pass `--username centos`) |
+| cirros | no cloud-init; the summary shows the image's built-in login `cirros` / `gocubsgo` (older images: `cubswin:)`) |
+
+**Password**
+- Each VM gets its own random 20-character password (letters and digits without `0 O o 1 l I`),
+  made with `openssl rand`.
+- Only its SHA-512 crypt hash (`openssl passwd -6`, password passed on stdin) goes into
+  cloud-init. The plain password is never in the user-data, logs, files, or process arguments.
+- It is shown **once** in the final summary. Optionally it can be saved to
+  `/tmp/vm-credentials-<time>.txt` (permission 600, default no).
+
+**cloud-init**
+- The `#cloud-config` keeps the image's `default` user and adds the chosen user with
+  `sudo: ALL=(ALL) NOPASSWD:ALL`, `/bin/bash`, the password hash, the public key in
+  `ssh_authorized_keys`, `ssh_pwauth`, and `chpasswd: {expire: false}`.
+- The template is the function `render_cloud_init`.
+- The user-data file is created with permission 600 in a temporary directory and removed on exit.
+
+**Keys**
+- The picker offers `~/.ssh/*.pub`, a manual path, the keypairs already registered, or no key.
+- The file is validated with `ssh-keygen -l`. Keypairs belong to the user, not the project: if
+  a keypair with the same fingerprint exists, it is reused. Otherwise a new one is created
+  (default name `<user>-<host>-<8 chars of the SHA256 fingerprint>`).
+- `--no-key` together with `--no-password` is refused, because the VM could not be reached.
+
+**Boot from volume**
+
+| Path | When | How |
+|---|---|---|
+| A | The CLI does not require `--image` and supports `volume_type=` in `--block-device`, and the compute microversion is ≥ 2.67 (upstream OSC) | One call: `server create --block-device uuid=<image>,source_type=image,destination_type=volume,boot_index=0,volume_size=N,delete_on_termination=..., volume_type=...`. The root volume is then renamed `<vm>-root` |
+| B | Older CLIs, e.g. **RHOSP 17.1 / OSC 5.5.2**, where `server create` requires one of `--image`, `--volume`, `--snapshot` | `volume create <vm>-root --image --size --bootable [--type]`, wait for `available`, then `server create --volume`. Delete on terminate is set after `ACTIVE` with `server volume update --delete-on-termination` (microversion 2.85) |
+
+`--boot-from-volume` is not used: it always keeps the volume and has no volume type. If delete on
+terminate cannot be set on path B, the summary and the log say that **the volume will NOT be
+deleted with the VM**. If the VM cannot be created, the script offers to delete the volume it
+created.
+
+**Other steps**
+- **Networks:** project, shared, and external networks with subnets. External networks are
+  marked, with a warning when picked as a NIC.
+- **Security groups:** shown with their ingress rules, with a warning when TCP 22 is closed.
+- **Host:** `--host` needs microversion ≥ 2.74, otherwise `--availability-zone zone:host` is
+  used. Both are admin-only, and a refusal is reported clearly.
+- **Quota:** `limits show --absolute` covers instances, vCPU, RAM, volumes, and volume GB, and
+  `quota show` plus the floating IP count cover floating IPs, all for the whole `--count`.
+  Per-volume-type quotas are not checked.
+- **Waiting:** polling shows status, task state, and elapsed time.
+  - `ERROR` shows the fault and offers to delete what the script created (the VM, a volume not
+    deleted with it, the floating IP).
+  - A timeout never deletes anything and shows the IDs.
+
+The log (`log/servers/create-vm-*.log`) contains:
+- the project, image, distribution, flavor, boot source and volume, networks, security groups,
+  keypair and fingerprint, and host;
+- every command that changes something (`CMD`);
+- a `RESULT` for `create-keypair`, `create-volume`, `create-server`, `add-floating-ip`, and
+  `cleanup`.
+
+Never logged: passwords, hashes, or user-data.
+
+**Only verifiable on a real cloud:** whether each image's cloud-init applies the user, password,
+and key; path B on RHOSP 17.1; and `--host` with a non-admin role.
+
+Environment (mainly for tests): `OSOPS_OS_CMD`, `OSOPS_COMPUTE_API_VERSION` (2.85, lowered to the
+cloud maximum), `OSOPS_FZF`, `OSOPS_CURL`, `OSOPS_POLL_INTERVAL` (5), `OSOPS_CREDS_DIR` (`/tmp`),
+`OSOPS_TIMEOUT_SEC`.
 
 ### Delete Volume (`volumes/delete-volume.sh`)
 
@@ -1132,6 +1262,7 @@ bash tests/collect-public-fip/run.sh
 bash tests/list-instances-by-host/run.sh
 bash tests/get-ip-info/run.sh
 bash tests/collect-sosreport/run.sh
+bash tests/create-vm/run.sh
 bash tests/view-container-logs/run.sh
 bash tests/search-container-logs/run.sh
 ```

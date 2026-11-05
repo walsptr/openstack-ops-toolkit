@@ -1,0 +1,326 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/create-vm (dipakai lewat OSOPS_OS_CMD).
+#
+# State di $STUB_STATE:
+#   calls.log            argv setiap panggilan (%q), untuk cek password tidak bocor
+#   env.log              scope yang terlihat per panggilan (opsi + variabel OS_*)
+#   servers/<id>.json, volumes/<id>.json, fips/<id>.json, keypairs.json
+#   userdata/<nama>.yaml  salinan --user-data saat server create (+ .perm)
+#   scen/<nama>          skenario (tidak ada = default):
+#     osc        7.1.2 (default) | 5.5.2   — teks --help dan format output
+#     mv         max compute microversion (default 2.88)
+#     admin      1 (default) | 0           — project list semua / compute service list
+#     norole     daftar project ID tanpa role (token issue gagal 401)
+#     server     ok (default) | error | timeout | createfail
+#     volume     ok (default) | error
+#     host       ok (default) | forbidden
+#     voldot     ok (default) | fail      — server volume update --delete-on-termination
+#     limits     file JSON pengganti fixtures/limits.json
+#     fipquota   limit floating IP (default 10); fipused (default 0)
+#     polls      jumlah show sampai ACTIVE/available (default 2)
+
+# shellcheck disable=SC2016  # filter jq
+set -o nounset
+set -o pipefail
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+IMAGES="$FIX/images.json"
+[[ -f "${STUB_STATE:?}/images.json" ]] && IMAGES="$STUB_STATE/images.json"
+mkdir -p "$S/servers" "$S/volumes" "$S/fips" "$S/userdata" "$S/polls" "$S/scen"
+[[ -f "$S/keypairs.json" ]] || echo '[]' > "$S/keypairs.json"
+
+{ printf '%q ' "$@"; echo; } >> "$S/calls.log"
+
+scen() {
+    if [[ -f "$S/scen/$1" ]]; then cat "$S/scen/$1"; else echo "$2"; fi
+}
+OSC="$(scen osc 7.1.2)"
+
+pid_opt=""
+args=()
+while (( $# > 0 )); do
+    case "$1" in
+        --os-compute-api-version) echo "$2" > "$S/last_mv"; shift 2 ;;
+        --os-project-id) pid_opt="$2"; shift 2 ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+set -- "${args[@]}"
+
+name_to_pid() {
+    jq -r --arg n "$1" '[ .[] | select(.Name == $n) | .ID ][0] // empty' "$FIX/projects.json"
+}
+
+# Project dari scope: opsi CLI > OS_PROJECT_ID > OS_PROJECT_NAME/OS_TENANT_NAME
+scope_pid() {
+    if [[ -n "$pid_opt" ]]; then echo "$pid_opt"
+    elif [[ -n "${OS_PROJECT_ID:-}" ]]; then echo "$OS_PROJECT_ID"
+    elif [[ -n "${OS_PROJECT_NAME:-}" ]]; then name_to_pid "$OS_PROJECT_NAME"
+    elif [[ -n "${OS_TENANT_NAME:-}" ]]; then name_to_pid "$OS_TENANT_NAME"
+    else echo "a0000000000000000000000000000001"; fi
+}
+PID="$(scope_pid)"
+printf 'cmd=%s opt=%s OS_PROJECT_ID=%s OS_PROJECT_NAME=%s OS_TENANT_NAME=%s OS_TENANT_ID=%s OS_PROJECT_DOMAIN_NAME=%s scope=%s\n' \
+    "${1:-}_${2:-}" "${pid_opt:--}" "${OS_PROJECT_ID-<unset>}" "${OS_PROJECT_NAME-<unset>}" "${OS_TENANT_NAME-<unset>}" \
+    "${OS_TENANT_ID-<unset>}" "${OS_PROJECT_DOMAIN_NAME-<unset>}" "$PID" >> "$S/env.log"
+
+has_arg() {
+    local a
+    for a in "${args[@]}"; do [[ "$a" == "$1" ]] && return 0; done
+    return 1
+}
+
+arg_after() {
+    local i
+    for (( i = 0; i < ${#args[@]}; i++ )); do
+        [[ "${args[$i]}" == "$1" ]] && { echo "${args[$(( i + 1 ))]:-}"; return 0; }
+    done
+    return 1
+}
+
+last_arg() {
+    echo "${args[$(( ${#args[@]} - 1 ))]}"
+}
+
+bump() {
+    local f="$S/polls/$1" n=0
+    [[ -f "$f" ]] && n="$(cat "$f")"
+    n=$(( n + 1 ))
+    echo "$n" > "$f"
+    echo "$n"
+}
+
+newid() {
+    printf '%08x-0000-4000-8000-%012x' "$RANDOM$RANDOM" "$(date +%s%N | cut -c10-18)"
+}
+
+subst_project() {
+    sed "s/@PROJECT@/$PID/g" "$1"
+}
+
+forbidden() {
+    echo "Policy doesn't allow $1 to be performed. (HTTP 403)" >&2
+    exit 1
+}
+
+if [[ " ${args[*]} " == *" --help "* ]]; then
+    case "${1:-} ${2:-} ${3:-}" in
+        "server create --help") cat "$FIX/help/$OSC/server_create.txt" ;;
+        "server volume update") cat "$FIX/help/$OSC/server_volume_update.txt" ;;
+        *) echo "usage: openstack $*" ;;
+    esac
+    exit 0
+fi
+
+case "${1:-} ${2:-}" in
+    "versions show")
+        jq -n --arg mv "$(scen mv 2.88)" '[{"Region Name":"regionOne","Service Type":"compute","Version":"2.1","Status":"CURRENT","Min Microversion":"2.1","Max Microversion":$mv}]'
+        ;;
+    "token issue")
+        if grep -qx "$PID" "$S/scen/norole" 2>/dev/null; then
+            echo "The request you have made requires authentication. (HTTP 401)" >&2
+            exit 1
+        fi
+        jq -n --arg p "$PID" '{expires:"2026-12-31T00:00:00Z", id:"gAAAA-stub-token", project_id:$p, user_id:"u1"}'
+        ;;
+    "catalog show")
+        jq -n '{name:"glance", type:"image", endpoints:[{id:"e1", interface:"public", region_id:"regionOne", url:"http://glance.stub:9292"}]}'
+        ;;
+    "project list")
+        if has_arg --my-projects; then
+            jq '[ .[] | select(.my) | {ID, Name, "Domain ID"} ]' "$FIX/projects.json"
+        else
+            [[ "$(scen admin 1)" == 1 ]] || forbidden "identity:list_projects"
+            jq '[ .[] | {ID, Name, "Domain ID"} ]' "$FIX/projects.json"
+        fi
+        ;;
+    "project show")
+        jq --arg p "$3" '[ .[] | select(.ID == $p) | {id: .ID, name: .Name, domain_id: ."Domain ID"} ][0] // empty' "$FIX/projects.json"
+        ;;
+    "domain show")
+        case "$3" in default) echo "Default" ;; *) echo "$3" ;; esac
+        ;;
+    "image list")
+        jq '[ .[] | select(.status == "active") | {ID: .id, Name: .name, Status: .status} ]' "$IMAGES"
+        ;;
+    "image show")
+        jq --arg i "$3" '[ .[] | select(.id == $i) | (del(.os_distro) + {properties: (if .os_distro then {os_distro: .os_distro} else {} end)}) ][0] // empty' "$IMAGES"
+        ;;
+    "flavor list")
+        cat "$FIX/flavors.json"
+        ;;
+    "volume type")
+        if has_arg --default; then
+            echo '[{"ID":"vt1","Name":"ceph"}]'
+        else
+            echo '[{"ID":"vt1","Name":"ceph","Is Public":true},{"ID":"vt2","Name":"ssd","Is Public":true}]'
+        fi
+        ;;
+    "network list")
+        subst_project "$FIX/networks.json"
+        ;;
+    "subnet list")
+        cat "$FIX/subnets.json"
+        ;;
+    "security group")
+        if [[ "${3:-}" == rule ]]; then
+            cat "$FIX/rules.json"
+        else
+            subst_project "$FIX/sgs.json"
+        fi
+        ;;
+    "keypair list")
+        jq '[ .[] | {Name: .name, Fingerprint: .fingerprint, Type: "ssh"} ]' "$S/keypairs.json"
+        ;;
+    "keypair show")
+        n="$(last_arg)"
+        jq -r --arg n "$n" '.[] | select(.name == $n) | .public_key' "$S/keypairs.json"
+        ;;
+    "keypair create")
+        n="$(last_arg)"
+        f="$(arg_after --public-key)"
+        fp="$(ssh-keygen -l -E md5 -f "$f" | awk '{print $2}' | sed 's/^MD5://')"
+        jq --arg n "$n" --arg fp "$fp" --arg k "$(head -n 1 "$f")" '. + [{name:$n, fingerprint:$fp, public_key:$k}]' \
+            "$S/keypairs.json" > "$S/keypairs.tmp" && mv "$S/keypairs.tmp" "$S/keypairs.json"
+        jq -n --arg n "$n" --arg fp "$fp" '{name:$n, fingerprint:$fp}'
+        ;;
+    "compute service")
+        [[ "$(scen admin 1)" == 1 ]] || forbidden "os_compute_api:os-services:list"
+        cat "$FIX/services.json"
+        ;;
+    "limits show")
+        if [[ -f "$S/scen/limits" ]]; then cat "$S/scen/limits"; else cat "$FIX/limits.json"; fi
+        ;;
+    "quota show")
+        q="$(scen fipquota 10)"
+        if [[ "$OSC" == 5.5.2 ]]; then
+            jq -n --argjson q "$q" '{"floating-ips": $q, instances: 10, cores: 20, ram: 51200}'
+        else
+            jq -n --argjson q "$q" '[{Resource:"floating-ips", Limit:$q}, {Resource:"instances", Limit:10}]'
+        fi
+        ;;
+    "floating ip")
+        case "${3:-}" in
+            list)
+                u="$(scen fipused 0)"
+                jq -n --argjson u "$u" '[ range(0; $u) | {ID: "used-\(.)"} ]'
+                ;;
+            create)
+                id="fip-$(newid)"
+                jq -n --arg id "$id" '{id:$id, floating_ip_address:"203.0.113.10"}' | tee "$S/fips/$id.json"
+                ;;
+            delete)
+                rm -f "$S/fips/$4.json"
+                ;;
+        esac
+        ;;
+    "volume create")
+        n="$(last_arg)"
+        id="$(newid)"
+        jq -n --arg id "$id" --arg n "$n" --arg s "$(arg_after --size)" --arg t "$(arg_after --type || true)" \
+            '{id:$id, name:$n, status:"creating", size:($s|tonumber), volume_type:$t, bootable:"true"}' > "$S/volumes/$id.json"
+        jq '{id, name, status, size}' "$S/volumes/$id.json"
+        ;;
+    "volume show")
+        f="$S/volumes/$3.json"
+        [[ -f "$f" ]] || { echo "No volume with a name or ID of '$3' exists." >&2; exit 1; }
+        n="$(bump "v$3")"
+        if (( n >= $(scen polls 2) )) && [[ "$(jq -r .status "$f")" == creating ]]; then
+            if [[ "$(scen volume ok)" == error ]]; then st=error; else st=available; fi
+            jq --arg st "$st" '.status = $st' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        fi
+        cat "$f"
+        ;;
+    "volume delete")
+        rm -f "$S/volumes/$3.json"
+        ;;
+    "volume set")
+        n="$(arg_after --name)"
+        f="$S/volumes/$(last_arg).json"
+        [[ -f "$f" ]] && jq --arg n "$n" '.name = $n' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        ;;
+    "server create")
+        n="$(last_arg)"
+        if [[ "$OSC" == 5.5.2 ]] && ! has_arg --image && ! has_arg --volume && ! has_arg --snapshot; then
+            echo "openstack server create: error: one of the arguments --image --image-property --volume --snapshot is required" >&2
+            exit 2
+        fi
+        if has_arg --host && [[ "$(scen host ok)" == forbidden ]]; then
+            forbidden "os_compute_api:servers:create:requested_destination"
+        fi
+        if [[ "$(arg_after --availability-zone || true)" == *:* && "$(scen host ok)" == forbidden ]]; then
+            forbidden "os_compute_api:servers:create:forced_host"
+        fi
+        if [[ "$(scen server ok)" == createfail ]]; then
+            echo "Quota exceeded for instances: Requested 1, but already used 10 of 10 instances (HTTP 403)" >&2
+            exit 1
+        fi
+        ud="$(arg_after --user-data || true)"
+        if [[ -n "$ud" ]]; then
+            cp "$ud" "$S/userdata/$n.yaml"
+            stat -c %a "$ud" > "$S/userdata/$n.perm"
+        fi
+        id="$(newid)"
+        vols='[]' dot=false
+        if v="$(arg_after --volume)"; then
+            vols="$(jq -n --arg v "$v" '[{id:$v}]')"
+        fi
+        if bdm="$(arg_after --block-device)"; then
+            vid="$(newid)"
+            sz="$(sed -n 's/.*volume_size=\([0-9]*\).*/\1/p' <<< "$bdm")"
+            vt="$(sed -n 's/.*volume_type=\([^,]*\).*/\1/p' <<< "$bdm")"
+            [[ "$bdm" == *delete_on_termination=true* ]] && dot=true
+            jq -n --arg id "$vid" --arg s "$sz" --arg t "$vt" '{id:$id, name:"", status:"in-use", size:($s|tonumber), volume_type:$t, bootable:"true"}' > "$S/volumes/$vid.json"
+            vols="$(jq -n --arg v "$vid" '[{id:$v}]')"
+        fi
+        jq -n --arg id "$id" --arg n "$n" --argjson v "$vols" --argjson dot "$dot" --arg az "$(arg_after --availability-zone || true)" \
+            --arg host "$(arg_after --host || true)" \
+            '{id:$id, name:$n, status:"BUILD", "OS-EXT-STS:task_state":"spawning", volumes_attached:$v, dot:$dot, az:$az, req_host:$host}' > "$S/servers/$id.json"
+        jq -n --arg id "$id" --arg n "$n" '{id:$id, name:$n, status:"BUILD", adminPass:"STUB-ADMIN-PASS-7f3c91"}'
+        ;;
+    "server show")
+        f="$S/servers/$3.json"
+        [[ -f "$f" ]] || { echo "No server with a name or ID of '$3' exists." >&2; exit 1; }
+        n="$(bump "s$3")"
+        if (( n >= $(scen polls 2) )) && [[ "$(jq -r .status "$f")" == BUILD ]]; then
+            case "$(scen server ok)" in
+                error)   jq '.status = "ERROR" | ."OS-EXT-STS:task_state" = null | .fault = {code:500, message:"No valid host was found. There are not enough hosts available."}' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+                timeout) : ;;
+                *)       jq '.status = "ACTIVE" | ."OS-EXT-STS:task_state" = null | ."OS-EXT-SRV-ATTR:host" = "compute-0.example.com"' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+            esac
+        fi
+        if [[ "$OSC" == 5.5.2 ]]; then
+            jq '. + {addresses: "private=10.0.0.5", volumes_attached: ([.volumes_attached[] | "id='"'"'\(.id)'"'"'"] | join("\n"))}' "$f"
+        else
+            jq '. + {addresses: {private: ["10.0.0.5"]}}' "$f"
+        fi
+        ;;
+    "server delete")
+        f="$S/servers/$3.json"
+        if [[ -f "$f" ]]; then
+            if [[ "$(jq -r .dot "$f")" == true ]]; then
+                for v in $(jq -r '.volumes_attached[].id' "$f"); do rm -f "$S/volumes/$v.json"; done
+            fi
+            rm -f "$f"
+        fi
+        ;;
+    "server volume")
+        # server volume update --delete-on-termination SERVER VOLUME
+        if [[ "$(scen voldot ok)" == fail ]]; then
+            echo "Invalid input for field/attribute delete_on_termination (HTTP 400)" >&2
+            exit 1
+        fi
+        s="${args[$(( ${#args[@]} - 2 ))]}"
+        f="$S/servers/$s.json"
+        [[ -f "$f" ]] && jq '.dot = true' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        ;;
+    "server add")
+        :
+        ;;
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac
+exit 0

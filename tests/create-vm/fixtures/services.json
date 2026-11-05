@@ -1,0 +1,6 @@
+[
+  {"ID": 1, "Binary": "nova-compute", "Host": "compute-0.example.com", "Zone": "nova", "Status": "enabled", "State": "up"},
+  {"ID": 2, "Binary": "nova-compute", "Host": "compute-1.example.com", "Zone": "az2", "Status": "enabled", "State": "up"},
+  {"ID": 3, "Binary": "nova-compute", "Host": "compute-2.example.com", "Zone": "nova", "Status": "disabled", "State": "up"},
+  {"ID": 4, "Binary": "nova-compute", "Host": "compute-3.example.com", "Zone": "nova", "Status": "enabled", "State": "down"}
+]
