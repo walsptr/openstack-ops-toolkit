@@ -582,7 +582,32 @@ test_dry_run() {
     expect_match "log dry_run=true" "$(log_text)" 'dry_run=true action=create-server resource=web-1'
 }
 
-ALL_TESTS=(scope images flavor boot_path_a boot_path_b distros password keypair host quota_fip error_timeout dry_run)
+test_secgroup_default() {
+    local rc
+    begin "secgroup_default"
+    run_cv "" --project dev --name web --image "$IMG_RHEL" --flavor m1.small --network private \
+        --volume-size 12 --volume-type ssd --boot volume --no-key --dry-run
+    rc="$(exit_code)"
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "default dipakai tanpa picker" "$(screen_text)" "Security group: default milik project dev"
+    expect_eq "fzf tidak dipanggil untuk security group" "$(grep -c 'secgroup' "$WORK/state/calls.log" || true)" "0"
+    expect_match "default milik project tujuan (bukan project lain)" "$(screen_text)" '--security-group sg-default '
+    expect_match "ringkasan ingress tetap tampil" "$(screen_text)" 'default ingress   : icmp/all 0.0.0.0/0, tcp/22:22 0.0.0.0/0'
+    expect_match "log sumber default" "$(log_text)" 'security_groups=default security_group_source=default'
+
+    begin "secgroup_no_default"
+    jq '[ .[] | select(.Name != "default") ]' "$HERE/fixtures/sgs.json" > "$WORK/state/sgs.json"
+    run_cv "STUB_FZF_1=^sg-web" --project dev --name web --image "$IMG_RHEL" --flavor m1.small --network private \
+        --volume-size 12 --volume-type ssd --boot volume --no-key --dry-run
+    rc="$(exit_code)"
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "tanpa default: info + picker" "$(screen_text)" "Security group 'default' tidak ada di project dev: pilih security group"
+    expect_match "picker berisi web" "$(cat "$WORK/state/fzf1.in" 2>/dev/null)" 'web'
+    expect_match "peringatan SSH tertutup" "$(screen_text)" 'Tidak ada aturan ingress yang membuka TCP 22'
+    expect_match "log sumber picker" "$(log_text)" 'security_group_source=picker'
+}
+
+ALL_TESTS=(scope secgroup_default images flavor boot_path_a boot_path_b distros password keypair host quota_fip error_timeout dry_run)
 for t in "${ALL_TESTS[@]}"; do
     want "$t" && "test_$t"
 done

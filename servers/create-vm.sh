@@ -34,7 +34,7 @@ VM:
   --delete-volume-on-terminate | --keep-volume
                              Hapus root volume saat VM dihapus (default: hapus)
   --network NAMA|ID          Network (bisa diulang; urutan = urutan NIC)
-  --security-group NAMA|ID   Security group (bisa diulang)
+  --security-group NAMA|ID   Security group (bisa diulang; default: "default" milik project)
   --availability-zone ZONE   Availability zone
   --host COMPUTE             Compute tujuan (admin)
   --floating-ip NETWORK      Alokasikan dan pasang floating IP dari network external
@@ -947,7 +947,7 @@ sg_allows_ssh() {
 }
 
 select_secgroup() {
-    local json f="$WORK_DIR/sgs.lst" id name w row ids_json
+    local json f="$WORK_DIR/sgs.lst" id name w row ids_json n_def=0 source="option"
     local -a picked=()
     json="$(os_cli security group list -f json 2>"$WORK_DIR/sg.err")" || die "security group list gagal: $(tail -n 1 "$WORK_DIR/sg.err")"
     json="$(jq --arg p "$PROJECT_ID" '[ .[] | select((.Project // $p) == $p) ]' <<< "$json")"
@@ -960,6 +960,21 @@ select_secgroup() {
             picked+=("$(jq -r '.[0].ID' <<< "$row")")
         done
     else
+        # Default: security group "default" milik project tujuan, tanpa picker
+        n_def="$(jq '[ .[] | select(.Name == "default") ] | length' <<< "$json")"
+        if (( n_def == 1 )); then
+            picked=("$(jq -r '.[] | select(.Name == "default") | .ID' <<< "$json")")
+            source="default"
+            info "Security group: default milik project $PROJECT_NAME (pakai --security-group untuk yang lain)."
+        fi
+    fi
+    if (( ${#picked[@]} == 0 )); then
+        source="picker"
+        if (( n_def == 0 )); then
+            info "Security group 'default' tidak ada di project $PROJECT_NAME: pilih security group."
+        else
+            info "Ada $n_def security group bernama 'default' di project $PROJECT_NAME: pilih salah satu."
+        fi
         : > "$f"
         # "default" di baris pertama: Enter tanpa Tab memilihnya
         while IFS="$US" read -r id name; do
@@ -980,7 +995,7 @@ select_secgroup() {
     if ! sg_allows_ssh "$ids_json"; then
         warn "Tidak ada aturan ingress yang membuka TCP 22 (SSH) di security group terpilih: VM tidak bisa diakses lewat SSH dari luar."
     fi
-    log_event INPUT "security_groups=$(IFS=,; echo "${SG_NAMES[*]}")"
+    log_event INPUT "security_groups=$(IFS=,; echo "${SG_NAMES[*]}")" "security_group_source=$source"
 }
 
 # ============================================================

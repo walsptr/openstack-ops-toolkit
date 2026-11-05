@@ -300,7 +300,7 @@ servers/create-vm.sh --name db --host compute-3.example.com --floating-ip public
 | `--boot volume\|image` | Default `volume` |
 | `--volume-size GB`, `--volume-type T` | Root volume size and type (default: the Cinder default type) |
 | `--delete-volume-on-terminate` / `--keep-volume` | Delete the root volume together with the VM (default: delete) |
-| `--network`, `--security-group` | Repeatable. The order of `--network` is the NIC order |
+| `--network`, `--security-group` | Repeatable. The order of `--network` is the NIC order. Without `--security-group`, the target project's `default` security group is used without a picker. The picker is only shown when the project has no `default` (or more than one) |
 | `--key-name`, `--public-key PATH`, `--no-key` | Key selection (see below) |
 | `--username`, `--no-password` | Override the distribution's default user; log in with the key only |
 | `--host`, `--availability-zone` | Target compute (admin) and zone |
@@ -373,7 +373,8 @@ created.
 **Other steps**
 - **Networks:** project, shared, and external networks with subnets. External networks are
   marked, with a warning when picked as a NIC.
-- **Security groups:** shown with their ingress rules, with a warning when TCP 22 is closed.
+- **Security groups:** the project's `default` unless `--security-group` is given, shown with its
+  ingress rules and a warning when TCP 22 is closed. The script never adds rules to any security group.
 - **Host:** `--host` needs microversion ≥ 2.74, otherwise `--availability-zone zone:host` is
   used. Both are admin-only, and a refusal is reported clearly.
 - **Quota:** `limits show --absolute` covers instances, vCPU, RAM, volumes, and volume GB, and

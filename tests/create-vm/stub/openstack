@@ -167,7 +167,7 @@ case "${1:-} ${2:-}" in
         if [[ "${3:-}" == rule ]]; then
             cat "$FIX/rules.json"
         else
-            subst_project "$FIX/sgs.json"
+            if [[ -f "$S/sgs.json" ]]; then subst_project "$S/sgs.json"; else subst_project "$FIX/sgs.json"; fi
         fi
         ;;
     "keypair list")
