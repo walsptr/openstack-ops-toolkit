@@ -388,6 +388,8 @@ The log (`log/servers/create-vm-*.log`) contains:
 - the project, image, distribution, flavor, boot source and volume, networks, security groups,
   keypair and fingerprint, and host;
 - every command that changes something (`CMD`);
+- a `CREATED kind=<server|volume|keypair|floating-ip> id=...` event right after each
+  resource is created (also when the script stops later);
 - a `RESULT` for `create-keypair`, `create-volume`, `create-server`, `add-floating-ip`, and
   `cleanup`.
 

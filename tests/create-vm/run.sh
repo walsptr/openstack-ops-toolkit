@@ -291,6 +291,8 @@ test_boot_path_b() {
     expect_match "summary: jalur B" "$(screen_text)" 'jalur B'
     expect_match "volume create dulu" "$(calls)" 'volume create --image 11111111-0000-4000-8000-000000000001 --size 12 --bootable --type ssd -f json web-root'
     expect_match "server create --volume" "$(calls)" 'server create .*--volume [0-9a-f-]{36} -f json web'
+    expect_match "ID volume dicatat saat dibuat" "$(log_text)" 'CREATED kind=volume id=[0-9a-f-]{36} name=web-root'
+    expect_match "ID server dicatat saat dibuat" "$(log_text)" 'CREATED kind=server id=[0-9a-f-]{36} name=web'
     expect_match "delete on terminate lewat server volume update" "$(calls)" 'server volume update --delete-on-termination'
     expect_match "microversion >= 2.85 untuk update" "$(calls | grep 'server volume update --delete')" 'compute-api-version 2.85'
     expect_match "progres volume" "$(screen_text)" 'volume [0-9a-f]{8}: available'
@@ -456,6 +458,7 @@ test_keypair() {
     expect_match "picker berisi path manual dan tanpa key" "$(cat "$WORK/state/fzf1.in")" '\[path public key lain'
     expect_match "keypair baru dibuat" "$(calls)" "keypair create --public-key $WORK/home/.ssh/id_rsa.pub my-rsa"
     expect_match "log create-keypair" "$(log_text)" 'RESULT resource=my-rsa action=create-keypair result=SUCCESS fingerprint='
+    expect_match "keypair dicatat CREATED" "$(log_text)" 'CREATED kind=keypair id=my-rsa'
 
     begin "keypair_manual_invalid"
     run_cv "STUB_FZF_1=^manual" --project dev "${BASE[@]}" --dry-run
@@ -526,6 +529,7 @@ test_quota_fip() {
     expect_match "dipasang setelah ACTIVE" "$(calls)" 'server add floating ip [0-9a-f-]{36} 203.0.113.10'
     expect_match "ringkasan + contoh SSH" "$(screen_text)" 'ssh cloud-user@203.0.113.10'
     expect_match "log add-floating-ip" "$(log_text)" 'action=add-floating-ip result=SUCCESS ip=203.0.113.10'
+    expect_match "floating IP dicatat CREATED" "$(log_text)" 'CREATED kind=floating-ip id=fip-'
 
     begin "fip_quota_short"
     scen fipquota 2
@@ -556,6 +560,7 @@ test_error_timeout() {
     expect_eq "timeout => exit 1" "$rc" "1"
     expect_match "status terakhir + tidak dihapus" "$(screen_text)" 'timeout 3s \(status terakhir BUILD\); resource TIDAK dihapus'
     expect_eq "tidak ada delete" "$(calls | grep -cE 'server delete|volume delete' || true)" "0"
+    expect_match "ID server tercatat walau timeout" "$(log_text)" 'CREATED kind=server id=[0-9a-f-]{36} name=web'
     expect_no_match "tidak ada tawaran cleanup" "$(screen_text)" 'Hapus resource yang dibuat'
 }
 

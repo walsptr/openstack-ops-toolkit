@@ -1444,6 +1444,7 @@ create_keypair() {
     [[ "$KEY_MODE" == create ]] || return 0
     if os_run keypair create --public-key "$PUBKEY_FILE" "$KEY_NAME" > /dev/null; then
         KEYPAIR_CREATED="$KEY_NAME"
+        log_event CREATED kind=keypair "id=$KEY_NAME" "fingerprint=$KEY_FP"
         log_result "resource=$KEY_NAME" action=create-keypair result=SUCCESS "fingerprint=$KEY_FP"
         echo "${C_GREEN}✅ Keypair $KEY_NAME dibuat.${C_RESET}"
     else
@@ -1464,6 +1465,7 @@ create_volume() {
     fi
     vid="$(jq -r '.id // empty' "$WORK_DIR/out.json")"
     R_VOLUME[i]="$vid"
+    log_event CREATED kind=volume "id=$vid" "name=$name" "project=$PROJECT_ID"
     echo "  💾 volume $name ($vid) dibuat, menunggu available..."
     rc=0
     wait_volume "$vid" || rc=$?
@@ -1517,6 +1519,7 @@ post_active_volume() {
         vid="$(server_volume_ids "$WORK_DIR/server-$i.json" | head -n 1)"
         if [[ -n "$vid" ]]; then
             R_VOLUME[i]="$vid"
+            log_event CREATED kind=volume "id=$vid" "name=${R_NAME[$i]}-root" "project=$PROJECT_ID" via=block-device
             if os_run volume set --name "${R_NAME[$i]}-root" "$vid" > /dev/null; then
                 log_result "resource=$vid" action=create-volume result=SUCCESS "name=${R_NAME[$i]}-root" "size=$VOL_SIZE" \
                     "type=${VOL_TYPE:-default}" "via=block-device" "delete_on_terminate=$DELETE_VOL"
@@ -1549,6 +1552,7 @@ attach_fip() {
     ip="$(jq -r '.floating_ip_address // empty' "$WORK_DIR/out.json")"
     fid="$(jq -r '.id // empty' "$WORK_DIR/out.json")"
     R_FIP_ID[i]="$fid"
+    log_event CREATED kind=floating-ip "id=$fid" "ip=$ip" "project=$PROJECT_ID"
     if os_run server add floating ip "${R_SERVER[$i]}" "$ip" > /dev/null; then
         R_FIP[i]="$ip"
         log_result "resource=${R_SERVER[$i]}" action=add-floating-ip result=SUCCESS "ip=$ip" "floating_ip_id=$fid"
@@ -1640,6 +1644,7 @@ create_server() {
     # Output server create bisa berisi adminPass: hanya ID yang diambil, file dikosongkan
     R_SERVER[i]="$(jq -r '.id // empty' "$WORK_DIR/out.json")"
     : > "$WORK_DIR/out.json"
+    log_event CREATED kind=server "id=${R_SERVER[$i]}" "name=${R_NAME[$i]}" "project=$PROJECT_ID"
     echo "  🖥️  server ${R_SERVER[$i]} dibuat, menunggu ACTIVE..."
     rc=0
     wait_server "$i" || rc=$?
