@@ -23,7 +23,11 @@
 #                         lalu $STACK_HOME/overcloud-deploy/*/tripleo-ansible-inventory.yaml
 #   rhosp_load_nodes      ansible-inventory --list (JSON di RHOSP_WORK_DIR) =>
 #                         array paralel N_NAME N_ROLE N_IP N_USER N_KEY N_PORT
-#                         N_CANON N_PCMK N_PCMKR N_LOCAL N_SEL N_HK + IDX_BY_NAME.
+#                         N_CANON N_PCMK N_PCMKR N_LOCAL N_SEL N_HK N_ALT N_ADDR
+#                         + IDX_BY_NAME. N_IP = ansible_host (identitas node dan
+#                         host key), N_ALT = alamat fallback dari segmen ctlplane
+#                         (ctlplane_ip, ctlplane_hostname), N_ADDR = alamat yang
+#                         benar-benar dipakai (kosong = belum ditentukan).
 #                         Hanya field yang dibutuhkan yang keluar dari hostvars
 #                         (hostvars berisi secret: tidak pernah dicetak/di-log utuh).
 #                         RHOSP_WITH_UNDERCLOUD=1: undercloud ditambahkan sebagai
@@ -40,6 +44,16 @@
 #   check_host_keys LABEL IDX...   host belum dikenal: satu konfirmasi untuk
 #                                  StrictHostKeyChecking=accept-new; tanpa
 #                                  terminal => reject. Key BERUBAH tetap ditolak.
+#   Fallback alamat: jika koneksi ke ansible_host gagal (connect timeout/
+#   refused/no route/DNS; BUKAN auth atau host key), ssh_node dan scp_fetch
+#   mencoba alamat ctlplane (N_ALT) dengan HostKeyAlias = ansible_host, jadi
+#   host key tetap diverifikasi terhadap key node yang sama. Alamat yang
+#   berhasil dipakai untuk semua koneksi berikutnya (juga dari subshell/worker,
+#   lewat $RHOSP_WORK_DIR/addr/IDX). Perintah remote belum berjalan saat
+#   koneksi gagal, jadi mengulang aman. ssh_node_stdin tidak mencoba ulang
+#   (stdin sudah dipakai): ia memakai alamat yang sudah ditentukan oleh
+#   koneksi sebelumnya (pre-check/discovery).
+#   rhosp_report_fallbacks IDX...  tampilkan node yang memakai alamat ctlplane
 #   ssh_node IDX TIMEOUT CMD       stdin dari /dev/null
 #   ssh_node_stdin IDX TIMEOUT CMD stdin dari pemanggil (pola search, atau FIFO
 #                                  yang ditahan terbuka untuk stream follow);
@@ -84,8 +98,10 @@ ROLE_ARGS=()
 INCLUDE_UC=0
 
 N_NAME=() N_ROLE=() N_IP=() N_USER=() N_KEY=() N_PORT=() N_CANON=()
-N_PCMK=() N_PCMKR=() N_LOCAL=() N_SEL=() N_HK=()
+N_PCMK=() N_PCMKR=() N_LOCAL=() N_SEL=() N_HK=() N_ALT=() N_ADDR=()
 declare -A IDX_BY_NAME=()
+declare -A _RHOSP_FB_SHOWN=()
+_RHOSP_ADDR=
 UC_IDX=-1
 UC_NAME=""
 UC_RELEASE=""
@@ -293,15 +309,22 @@ def clean: if . == null then "" else tostring | gsub("[\u001f\t\r\n]"; " ") end;
         ($hv.ansible_port // $hv.ansible_ssh_port // ""),
         ($hv.canonical_hostname // ""),
         (if $pm | any(.[]; . == $h) then "1" else "0" end),
-        (if $pmr | any(.[]; . == $h) then "1" else "0" end)
+        (if $pmr | any(.[]; . == $h) then "1" else "0" end),
+        ($hv.ctlplane_ip // ""),
+        ($hv.ctlplane_hostname // "")
       ] | map(clean) | join("\u001f") )
 '
+
+# Hostname/IP yang aman dipakai sebagai argumen ssh (tidak diawali '-')
+_rhosp_valid_addr() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]
+}
 
 rhosp_add_node() {
     local i=${#N_NAME[@]}
     N_NAME+=("$1") N_ROLE+=("$2") N_IP+=("$3") N_USER+=("$4") N_KEY+=("$5")
     N_PORT+=("$6") N_CANON+=("$7") N_PCMK+=("$8") N_PCMKR+=("$9") N_LOCAL+=("${10}")
-    N_SEL+=(0) N_HK+=("")
+    N_SEL+=(0) N_HK+=("") N_ALT+=("${11:-}") N_ADDR+=("")
     IDX_BY_NAME["${1,,}"]=$i
     if declare -F rhosp_on_node_added >/dev/null; then
         rhosp_on_node_added "$i"
@@ -311,7 +334,7 @@ rhosp_add_node() {
 
 rhosp_load_nodes() {
     local -a lines=()
-    local line kind name role ip user key port canon pm pmr n_ctrl=0 n_comp=0 n_bad=0 n_oc
+    local line kind name role ip user key port canon pm pmr ctl_ip ctl_host alts a n_ctrl=0 n_comp=0 n_bad=0 n_oc
     local rc=0 errfile="$RHOSP_WORK_DIR/ansible-inventory.err"
 
     [[ -n "$RHOSP_WORK_DIR" && -d "$RHOSP_WORK_DIR" ]] || die "RHOSP_WORK_DIR belum diset (bug script)."
@@ -331,15 +354,15 @@ rhosp_load_nodes() {
     mapfile -t lines < "$RHOSP_WORK_DIR/nodes.lst"
 
     for line in "${lines[@]}"; do
-        IFS="$US" read -r kind name role ip user key port canon pm pmr <<< "$line"
+        IFS="$US" read -r kind name role ip user key port canon pm pmr ctl_ip ctl_host <<< "$line"
         if [[ "$kind" == "U" ]]; then
             [[ -z "$UC_NAME" ]] && UC_NAME="$name"
             continue
         fi
 
         # Validasi sebelum dipakai di argumen ssh (cegah opsi/karakter aneh)
-        if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || ! "$ip" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ \
-              || ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ || ( -n "$port" && ! "$port" =~ ^[0-9]+$ ) ]]; then
+        if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || ! _rhosp_valid_addr "$ip" \
+              || [[ ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ || ( -n "$port" && ! "$port" =~ ^[0-9]+$ ) ]]; then
             n_bad=$(( n_bad + 1 ))
             warn "Host inventory dengan hostname/IP/user/port tidak valid dilewati: ${name//[^A-Za-z0-9._-]/?}"
             continue
@@ -349,7 +372,18 @@ rhosp_load_nodes() {
         key="${key/#\~/$HOME}"
         [[ -z "$key" ]] && key="$HOME/.ssh/id_rsa"
 
-        rhosp_add_node "$name" "$role" "$ip" "$user" "$key" "$port" "$canon" "${pm:-0}" "${pmr:-0}" 0
+        # Alamat fallback dari segmen ctlplane: valid dan berbeda dari ansible_host
+        alts=""
+        for a in "$ctl_ip" "$ctl_host"; do
+            [[ -z "$a" || "${a,,}" == "${ip,,}" || " ${alts,,} " == *" ${a,,} "* ]] && continue
+            if ! _rhosp_valid_addr "$a"; then
+                log_warn -q "alamat ctlplane tidak valid diabaikan: host=$name"
+                continue
+            fi
+            alts+="${alts:+ }$a"
+        done
+
+        rhosp_add_node "$name" "$role" "$ip" "$user" "$key" "$port" "$canon" "${pm:-0}" "${pmr:-0}" 0 "$alts"
         [[ "$pm" == 1 ]] && n_ctrl=$(( n_ctrl + 1 ))
         [[ "$pmr" == 1 ]] && n_comp=$(( n_comp + 1 ))
     done
@@ -366,11 +400,13 @@ rhosp_load_nodes() {
     echo "🖥️  Node overcloud   : $n_oc (pacemaker: $n_ctrl, pacemaker_remote: $n_comp)"
     log_event INVENTORY "file=$INVENTORY" "nodes=$n_oc" "pacemaker=$n_ctrl" \
         "pacemaker_remote=$n_comp" "invalid=$n_bad" "undercloud=${UC_NAME:--}"
-    local i
+    local i fb
     for i in "${!N_NAME[@]}"; do
         (( N_LOCAL[i] )) && continue
+        fb="${N_ALT[$i]:--}"
         log_event NODE "host=${N_NAME[$i]}" "role=${N_ROLE[$i]}" "ip=${N_IP[$i]}" "user=${N_USER[$i]}" \
-            "key=${N_KEY[$i]}" "port=${N_PORT[$i]:--}" "pacemaker=${N_PCMK[$i]}" "pacemaker_remote=${N_PCMKR[$i]}"
+            "key=${N_KEY[$i]}" "port=${N_PORT[$i]:--}" "pacemaker=${N_PCMK[$i]}" "pacemaker_remote=${N_PCMKR[$i]}" \
+            "fallback=${fb// /,}"
     done
     return 0
 }
@@ -602,8 +638,18 @@ rhosp_select_nodes() {
 
 SSH_OPTS=()
 
+# Identitas host key node IDX di known_hosts: ansible_host (dengan [..]:port
+# untuk port selain 22), juga saat koneksi lewat alamat fallback
+_rhosp_hk_id() {
+    local h="${N_IP[$1]}"
+    [[ -n "${N_PORT[$1]:-}" && "${N_PORT[$1]}" != 22 ]] && h="[$h]:${N_PORT[$1]}"
+    printf '%s' "$h"
+}
+
+# build_ssh_opts IDX PORT_FLAG [ADDR] — ADDR selain ansible_host: HostKeyAlias
+# supaya key diverifikasi (dan accept-new disimpan) atas nama ansible_host
 build_ssh_opts() {
-    local i="$1" port_flag="$2"
+    local i="$1" port_flag="$2" addr="${3:-${N_IP[$1]}}"
 
     SSH_OPTS=(
         -o BatchMode=yes
@@ -611,18 +657,148 @@ build_ssh_opts() {
         -o ServerAliveInterval=15
         -o "StrictHostKeyChecking=${N_HK[$i]:-yes}"
     )
+    [[ "$addr" != "${N_IP[$i]}" ]] && SSH_OPTS+=(-o "HostKeyAlias=$(_rhosp_hk_id "$i")")
     [[ -n "${N_KEY[$i]}" && -r "${N_KEY[$i]}" ]] && SSH_OPTS+=(-i "${N_KEY[$i]}")
     [[ -n "${N_PORT[$i]}" ]] && SSH_OPTS+=("$port_flag" "${N_PORT[$i]}")
     return 0
 }
 
-# ssh_node IDX TIMEOUT_DETIK REMOTE_CMD — stdout/stderr perintah remote apa adanya.
-# Tanpa -t, stdin dari /dev/null; timeout lokal sebagai pengaman.
-ssh_node() {
+# ------------------------------------------------------------
+# Fallback alamat (ansible_host => ctlplane_ip => ctlplane_hostname)
+# ------------------------------------------------------------
+
+# Ambil alamat yang sudah ditentukan oleh proses lain (subshell/worker)
+_rhosp_addr_sync() {
+    local i="$1" f a=""
+    [[ -n "${N_ADDR[$i]:-}" || -z "$RHOSP_WORK_DIR" ]] && return 0
+    f="$RHOSP_WORK_DIR/addr/$i"
+    [[ -r "$f" ]] || return 0
+    IFS= read -r a < "$f" || true
+    _rhosp_valid_addr "$a" && N_ADDR[i]="$a"
+    return 0
+}
+
+_rhosp_addr_set() {
+    local i="$1" a="$2" d="$RHOSP_WORK_DIR/addr" tmp
+    N_ADDR[i]="$a"
+    [[ -n "$RHOSP_WORK_DIR" && -d "$RHOSP_WORK_DIR" ]] || return 0
+    mkdir -p "$d" 2>/dev/null || return 0
+    tmp="$(mktemp "$d/.$i.XXXXXX" 2>/dev/null)" || return 0
+    if ! { printf '%s\n' "$a" > "$tmp" && mv -f "$tmp" "$d/$i"; } 2>/dev/null; then
+        rm -f "$tmp"
+    fi
+    return 0
+}
+
+# Alamat koneksi aktif node IDX
+rhosp_node_addr() {
+    _rhosp_addr_sync "$1"
+    printf '%s' "${N_ADDR[$1]:-${N_IP[$1]}}"
+}
+
+# Koneksi gagal sebelum perintah remote berjalan (aman untuk dicoba ulang).
+# Auth gagal dan host key berubah TIDAK termasuk (host yang sama).
+_rhosp_conn_error() {
+    grep -qE 'ssh: connect to host |Could not resolve hostname|Name or service not known|Temporary failure in name resolution|Network is unreachable|No route to host' "$1" 2>/dev/null
+}
+
+# Hostname yang hanya resolve ke alamat yang sudah dicoba tidak perlu dicoba
+# lagi (mencegah dua kali ConnectTimeout untuk node yang mati). Tanpa getent
+# atau resolve gagal: tetap dicoba.
+_rhosp_same_as_tried() {
+    local a="$1" r
+    local -a res=()
+    shift
+    [[ "$a" =~ ^[0-9.]+$ || "$a" == *:* ]] && return 1
+    command -v getent >/dev/null 2>&1 || return 1
+    mapfile -t res < <(timeout 5 getent ahosts "$a" 2>/dev/null | awk '{print $1}' | sort -u)
+    (( ${#res[@]} > 0 )) || return 1
+    for r in "${res[@]}"; do
+        [[ " ${*,,} " == *" ${r,,} "* ]] || return 1
+    done
+    return 0
+}
+
+# _rhosp_fb IDX CONN_RC FUNC ARGS... — jalankan FUNC (alamat di _RHOSP_ADDR);
+# jika koneksi gagal (rc == CONN_RC, 0 = rc apa pun selain 0) dan alamat belum
+# ditentukan, coba alamat fallback. stderr percobaan yang gagal hanya
+# diteruskan jika semua alamat gagal.
+_rhosp_fb() {
+    local i="$1" crc="$2" a rc=0 errf errall n=0 failed=1
+    local -a cands=() tried=()
+    shift 2
+
+    _rhosp_addr_sync "$i"
+    if [[ -n "${N_ADDR[$i]:-}" || -z "${N_ALT[$i]:-}" || -z "$RHOSP_WORK_DIR" || ! -d "$RHOSP_WORK_DIR" ]]; then
+        _RHOSP_ADDR="${N_ADDR[$i]:-${N_IP[$i]}}"
+        "$@"
+        return
+    fi
+
+    read -ra cands <<< "${N_IP[$i]} ${N_ALT[$i]}"
+    errf="$(mktemp "$RHOSP_WORK_DIR/.fb-err.XXXXXX")" || { _RHOSP_ADDR="${N_IP[$i]}"; "$@"; return; }
+    errall="$errf.all"
+    : > "$errall"
+
+    for a in "${cands[@]}"; do
+        n=$(( n + 1 ))
+        if (( n > 1 )) && _rhosp_same_as_tried "$a" "${tried[@]}"; then
+            log_event SSH_FALLBACK "host=${N_NAME[$i]}" "addr=$a" result=SKIPPED "reason=resolves to tried address"
+            continue
+        fi
+        tried+=("$a")
+        _RHOSP_ADDR="$a"
+        rc=0
+        "$@" 2> "$errf" || rc=$?
+        if (( rc != 0 )) && (( crc == 0 || rc == crc )) && _rhosp_conn_error "$errf"; then
+            cat "$errf" >> "$errall"
+            log_event SSH_FALLBACK "host=${N_NAME[$i]}" "addr=$a" result=FAILED \
+                "error=$(grep -v '^[[:space:]]*$' "$errf" | tail -n 1 | cut -c1-200)"
+            continue
+        fi
+        failed=0
+        _rhosp_addr_set "$i" "$a"
+        [[ "$a" != "${N_IP[$i]}" ]] && log_event SSH_FALLBACK "host=${N_NAME[$i]}" \
+            "ansible_host=${N_IP[$i]}" "addr=$a" result=SUCCESS
+        break
+    done
+
+    if (( failed )); then
+        cat "$errall" >&2
+    else
+        cat "$errf" >&2
+    fi
+    rm -f "$errf" "$errall"
+    return "$rc"
+}
+
+# rhosp_report_fallbacks IDX... — beri tahu operator (sekali per node) node
+# yang dihubungi lewat alamat ctlplane, bukan ansible_host
+rhosp_report_fallbacks() {
+    local i
+    for i in "$@"; do
+        (( N_LOCAL[i] )) && continue
+        _rhosp_addr_sync "$i"
+        [[ -n "${N_ADDR[$i]:-}" && "${N_ADDR[$i]}" != "${N_IP[$i]}" ]] || continue
+        [[ -n "${_RHOSP_FB_SHOWN[$i]+x}" ]] && continue
+        _RHOSP_FB_SHOWN[$i]=1
+        info "${N_NAME[$i]}: ansible_host ${N_IP[$i]} tidak bisa dihubungi, memakai alamat ctlplane ${N_ADDR[$i]}"
+    done
+    return 0
+}
+
+_rhosp_ssh_once() {
     local i="$1" t="$2" cmd="$3"
-    build_ssh_opts "$i" -p
+    build_ssh_opts "$i" -p "$_RHOSP_ADDR"
     timeout --kill-after=10 "$t" \
-        "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@${N_IP[$i]}" "$cmd" < /dev/null
+        "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$_RHOSP_ADDR" "$cmd" < /dev/null
+}
+
+# ssh_node IDX TIMEOUT_DETIK REMOTE_CMD — stdout/stderr perintah remote apa adanya.
+# Tanpa -t, stdin dari /dev/null; timeout lokal sebagai pengaman. Fallback
+# alamat ctlplane jika ansible_host tidak bisa dihubungi.
+ssh_node() {
+    _rhosp_fb "$1" 255 _rhosp_ssh_once "$@"
 }
 
 # ssh_node_stdin IDX TIMEOUT_DETIK REMOTE_CMD — seperti ssh_node, tetapi stdin
@@ -631,27 +807,32 @@ ssh_node() {
 # ditahan terbuka: saat ssh berhenti, perintah remote menerima EOF).
 # TIMEOUT 0 = tanpa timeout lokal (ssh tetap di process group pemanggil).
 # LogLevel=ERROR: banner sshd dan "Permanently added" tidak masuk stream
-# (error koneksi/auth/host key tetap tampil).
+# (error koneksi/auth/host key tetap tampil). Tanpa percobaan ulang: memakai
+# alamat yang sudah ditentukan koneksi sebelumnya.
 ssh_node_stdin() {
-    local i="$1" t="$2" cmd="$3"
-    build_ssh_opts "$i" -p
+    local i="$1" t="$2" cmd="$3" addr
+    addr="$(rhosp_node_addr "$i")"
+    build_ssh_opts "$i" -p "$addr"
     SSH_OPTS+=(-o LogLevel=ERROR)
     if (( t > 0 )); then
         timeout --kill-after=10 "$t" \
-            "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@${N_IP[$i]}" "$cmd"
+            "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$addr" "$cmd"
     else
-        "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@${N_IP[$i]}" "$cmd"
+        "${SSH_CMD[@]}" "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$addr" "$cmd"
     fi
+}
+
+_rhosp_scp_once() {
+    local i="$1" src="$2" dst="$3" t="$4" host="$_RHOSP_ADDR"
+    [[ "$host" == *:* ]] && host="[$host]"
+    build_ssh_opts "$i" -P "$_RHOSP_ADDR"
+    timeout --kill-after=10 "$t" \
+        "${SCP_CMD[@]}" -q "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$host:$src" "$dst" < /dev/null
 }
 
 # scp_fetch IDX REMOTE_PATH LOCAL_PATH TIMEOUT_DETIK
 scp_fetch() {
-    local i="$1" src="$2" dst="$3" t="$4" host
-    host="${N_IP[$i]}"
-    [[ "$host" == *:* ]] && host="[$host]"
-    build_ssh_opts "$i" -P
-    timeout --kill-after=10 "$t" \
-        "${SCP_CMD[@]}" -q "${SSH_OPTS[@]}" -- "${N_USER[$i]}@$host:$src" "$dst" < /dev/null
+    _rhosp_fb "$1" 0 _rhosp_scp_once "$@"
 }
 
 # Klasifikasi kegagalan SSH dari stderr => alasan SKIPPED
@@ -673,8 +854,8 @@ ssh_fail_reason() {
 # ============================================================
 
 host_key_known() {
-    local i="$1" host="${N_IP[$1]}" f
-    [[ -n "${N_PORT[$i]}" && "${N_PORT[$i]}" != 22 ]] && host="[$host]:${N_PORT[$i]}"
+    local host f
+    host="$(_rhosp_hk_id "$1")"
     for f in "$HOME/.ssh/known_hosts" /etc/ssh/ssh_known_hosts; do
         [[ -r "$f" ]] || continue
         ssh-keygen -F "$host" -f "$f" >/dev/null 2>&1 && return 0
@@ -733,9 +914,9 @@ check_host_keys() {
 
 # Catat fingerprint host key yang baru diterima (setelah koneksi pertama)
 log_accepted_key() {
-    local i="$1" host="${N_IP[$1]}" fp
+    local i="$1" host fp
     [[ "${N_HK[$i]}" == "accept-new" ]] || return 0
-    [[ -n "${N_PORT[$i]}" && "${N_PORT[$i]}" != 22 ]] && host="[$host]:${N_PORT[$i]}"
+    host="$(_rhosp_hk_id "$i")"
     fp="$(ssh-keygen -l -F "$host" -f "$HOME/.ssh/known_hosts" 2>/dev/null | awk '!/^#/ {print $3 "/" $2; exit}')" || fp=""
-    log_event HOSTKEY_ACCEPTED "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" "fingerprint=${fp:--}"
+    log_event HOSTKEY_ACCEPTED "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" "fingerprint=${fp:--}" "addr=$(rhosp_node_addr "$i")"
 }

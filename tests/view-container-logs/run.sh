@@ -97,6 +97,50 @@ test_unreachable() {
     expect_match "semua gagal => keluar" "$PLAIN_OUT" 'Tidak ada node terpilih yang bisa dijangkau'
 }
 
+# ansible_host tidak terjangkau => fallback ke alamat ctlplane (ctlplane_hostname;
+# ctlplane_ip di fixture sama dengan ansible_host). Host key tetap diverifikasi
+# atas nama ansible_host (HostKeyAlias). Auth gagal / host key berubah: tanpa fallback.
+test_fallback() {
+    local alt=overcloud-controller-1.ctlplane.example.com
+    begin "fallback_ctlplane"
+    cp -a "$WORK/state/hosts/$C1" "$WORK/state/hosts/$alt"
+    host_env "$C1" UNREACHABLE=1
+    run_plain "" --node overcloud-controller-1 --log nova/nova-api.log --lines 1
+    expect_eq "exit code 0" "$PLAIN_RC" "0"
+    expect_match "operator diberi tahu" "$PLAIN_OUT" "overcloud-controller-1: ansible_host $C1 tidak bisa dihubungi, memakai alamat ctlplane $alt"
+    expect_match "log tetap dibaca" "$PLAIN_OUT" '══════ overcloud-controller-1 │ nova/nova-api.log'
+    expect_match "tail lewat alamat ctlplane" "$(calls | grep "^ssh	$alt	" | grep tail)" 'nova-api'
+    expect_eq "ansible_host hanya dicoba sekali" "$(calls | grep -c "^ssh	$C1	")" "1"
+    expect_match "log SSH_FALLBACK" "$(log_text)" "SSH_FALLBACK host=overcloud-controller-1 ansible_host=$C1 addr=$alt result=SUCCESS"
+    expect_match "log DISCOVERY dengan addr" "$(log_text)" "DISCOVERY host=overcloud-controller-1 ip=$C1 result=OK .* addr=$alt"
+    expect_true "known_hosts tanpa entry baru" sh -c "! grep -q '^$alt ' '$WORK/home/.ssh/known_hosts'"
+
+    begin "fallback_hostkey_alias"
+    cp -a "$WORK/state/hosts/$C1" "$WORK/state/hosts/$alt"
+    host_env "$C1" UNREACHABLE=1
+    grep -v "^$C1 " "$WORK/home/.ssh/known_hosts" > "$WORK/kh" && mv "$WORK/kh" "$WORK/home/.ssh/known_hosts"
+    run_plain "" --node overcloud-controller-1 --log nova/nova-api.log --lines 1
+    expect_match "key ansible_host tidak dikenal: tidak ada koneksi" "$PLAIN_OUT" 'overcloud-controller-1 +DILEWATI \(host key unknown\)'
+    expect_true "alamat ctlplane tidak dihubungi" sh -c "! grep -q '^ssh	$alt	' '$WORK/state/calls.log'"
+
+    begin "fallback_not_on_auth_or_hostkey"
+    cp -a "$WORK/state/hosts/$C1" "$WORK/state/hosts/$alt"
+    cp -a "$WORK/state/hosts/$C2" "$WORK/state/hosts/overcloud-controller-2.ctlplane.example.com"
+    host_env "$C1" AUTH_FAIL=1
+    host_env "$C2" HOSTKEY_CHANGED=1
+    run_plain "" --node overcloud-controller-1 --node overcloud-controller-2 --log nova/nova-api.log --lines 1
+    expect_match "auth gagal: dilewati" "$PLAIN_OUT" 'overcloud-controller-1 +DILEWATI \(ssh auth failed\)'
+    expect_match "host key berubah: dilewati" "$PLAIN_OUT" 'overcloud-controller-2 +DILEWATI \(host key mismatch\)'
+    expect_true "tidak ada fallback" sh -c "! grep -q '\.ctlplane\.' '$WORK/state/calls.log'"
+
+    begin "fallback_all_fail"
+    host_env "$C1" UNREACHABLE=1
+    run_plain "" --node overcloud-controller-1 --node overcloud-controller-0 --log nova/nova-api.log --lines 1
+    expect_match "semua alamat gagal: unreachable" "$PLAIN_OUT" 'overcloud-controller-1 +DILEWATI \(unreachable\)'
+    expect_match "alamat ctlplane dicoba" "$(calls)" "ssh	$alt	"
+    expect_match "log SSH_FALLBACK FAILED" "$(log_text)" "SSH_FALLBACK host=overcloud-controller-1 addr=$alt result=FAILED"
+}
+
 test_hostkey() {
     begin "hostkey_unknown_no_tty"
     grep -v "^$C1 " "$WORK/home/.ssh/known_hosts" > "$WORK/kh" && mv "$WORK/kh" "$WORK/home/.ssh/known_hosts"
@@ -288,7 +332,7 @@ test_inventory_nested() {
     check_no_secrets
 }
 
-ALL_TESTS=(inventory_nested role_picker multi_node unreachable hostkey tail_menu_save follow follow_kill9 options no_fzf_menu platform)
+ALL_TESTS=(inventory_nested role_picker multi_node unreachable fallback hostkey tail_menu_save follow follow_kill9 options no_fzf_menu platform)
 for t in "${ALL_TESTS[@]}"; do
     want "$t" && "test_$t"
 done

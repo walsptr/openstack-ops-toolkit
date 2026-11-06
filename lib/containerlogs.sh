@@ -196,6 +196,7 @@ cl_discover() {
         wait "${CL_BG_PIDS[@]}" 2>/dev/null || true
         CL_BG_PIDS=()
     fi
+    rhosp_report_fallbacks "${todo[@]}"
 
     for i in "${todo[@]}"; do
         rc="$(cat "$CL_WORK/disc/$i.rc" 2>/dev/null)" || rc=""
@@ -231,7 +232,7 @@ cl_discover() {
         log_accepted_key "$i"
         _cl_load_node "$i"
         log_event DISCOVERY "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" result=OK "active=${CL_NACT[$i]}" \
-            "rotated=${CL_NROT[$i]}" "invalid_path=$bad" "find_rc=$frc"
+            "rotated=${CL_NROT[$i]}" "invalid_path=$bad" "find_rc=$frc" "addr=$(rhosp_node_addr "$i")"
     done
 
     for i in "$@"; do
@@ -281,8 +282,8 @@ cl_build_index() {
     # Data untuk --_preview: node (tanpa secret) dan owner per path. Pemisah
     # \x1f (bukan tab): read dengan IFS=tab menggabungkan field kosong (port)
     for i in $(cl_ok_nodes); do
-        printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$i" "${N_NAME[$i]}" "${N_USER[$i]}" "${N_IP[$i]}" \
-            "${N_KEY[$i]}" "${N_PORT[$i]}" "${N_HK[$i]/accept-new/yes}"
+        printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' "$i" "${N_NAME[$i]}" "${N_USER[$i]}" "${N_IP[$i]}" \
+            "${N_KEY[$i]}" "${N_PORT[$i]}" "${N_HK[$i]/accept-new/yes}" "$(rhosp_node_addr "$i")"
     done > "$CL_WORK/nodes.tsv"
     return 0
 }
@@ -526,7 +527,7 @@ cl_save() {
 # ============================================================
 
 cl_preview_main() {
-    local dir="$1" path="$2" idx name user ip key port hk owner cache rc=0
+    local dir="$1" path="$2" idx name user ip key port hk addr owner cache rc=0
     path="${path#\'}"
     path="${path%\'}"
     [[ -d "$dir" && -r "$dir/index.tsv" ]] || { echo "(preview tidak tersedia)"; return 0; }
@@ -539,10 +540,12 @@ cl_preview_main() {
     owner="$(awk -F '\t' -v p="$path" '$1 == p { print $5; exit }' "$dir/index.tsv")"
     [[ -n "$owner" ]] || { echo "(tidak ada data node)"; return 0; }
 
-    while IFS="$US" read -r idx name user ip key port hk; do
+    while IFS="$US" read -r idx name user ip key port hk addr; do
         [[ "$idx" == "$owner" ]] || continue
         N_NAME[idx]="$name" N_USER[idx]="$user" N_IP[idx]="$ip"
         N_KEY[idx]="$key" N_PORT[idx]="$port" N_HK[idx]="$hk"
+        # Alamat yang sudah ditentukan saat discovery (tanpa fallback di preview)
+        _rhosp_valid_addr "${addr:-}" && N_ADDR[idx]="$addr"
     done < "$dir/nodes.tsv"
     [[ -n "${N_NAME[$owner]:-}" ]] || { echo "(tidak ada data node)"; return 0; }
 

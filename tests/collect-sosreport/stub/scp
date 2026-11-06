@@ -26,7 +26,15 @@ SCP_FAIL=0 SCP_CORRUPT=0 UNREACHABLE=0
 # shellcheck disable=SC1091
 [[ -f "$hd/env" ]] && source "$hd/env"
 
-[[ "$UNREACHABLE" == 1 || "$SCP_FAIL" == 1 ]] && { echo "scp: Connection closed" >&2; exit 1; }
+if [[ ! -d "$hd" ]]; then
+    printf 'ssh: Could not resolve hostname %s: Name or service not known\nscp: Connection closed\n' "$host" >&2
+    exit 255
+fi
+if [[ "$UNREACHABLE" == 1 ]]; then
+    printf 'ssh: connect to host %s port 22: Connection timed out\nscp: Connection closed\n' "$host" >&2
+    exit 255
+fi
+[[ "$SCP_FAIL" == 1 ]] && { echo "scp: Connection closed" >&2; exit 1; }
 
 cp -- "${path//\/var\/tmp/$hd/var_tmp}" "$dst" || exit 1
 [[ "$SCP_CORRUPT" == 1 && "$dst" != *.sha256 ]] && printf 'X' >> "$dst"

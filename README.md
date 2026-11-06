@@ -864,14 +864,27 @@ rhosp/collect-sosreport.sh --role Controller --dry-run
 is chosen by name). It is read with `ansible-inventory -i <file> --list` and `jq`. Overcloud hosts
 are the members of `allovercloud`; the role is the hostvar `tripleo_role_name`; the undercloud is
 recognised by the group name `Undercloud` (its `ansible_ssh_private_key_file` does not apply to
-overcloud nodes). Only hostname, role, `ansible_host`, user, key path, port, and
-`canonical_hostname` are taken from hostvars — the inventory (which contains secrets such as
-`overcloud_admin_password`) is never printed or logged.
+overcloud nodes). Only hostname, role, `ansible_host`, user, key path, port,
+`canonical_hostname`, `ctlplane_ip`, and `ctlplane_hostname` are taken from hostvars — the
+inventory (which contains secrets such as `overcloud_admin_password`) is never printed or logged.
 
 **SSH** — `BatchMode=yes`, `ConnectTimeout=10`, `ServerAliveInterval=15`. Hosts whose key is
 already in `known_hosts` use `StrictHostKeyChecking=yes`; unknown hosts are listed once and, after
 one confirmation, use `accept-new` (fingerprint logged). A changed host key is never overwritten:
 the node is `SKIPPED (host key mismatch)`.
+
+**Address fallback (ctlplane)** — nodes are reached through `ansible_host`. When the connection to
+it fails (connect timeout, connection refused, no route, name resolution — *not* failed
+authentication or a host key mismatch, which are the same host), the address of the ctlplane
+segment is tried: `ctlplane_ip`, then `ctlplane_hostname` (only values that differ from
+`ansible_host`; a hostname that resolves only to an address already tried is skipped). The
+remote command never ran on a failed connection, so retrying is safe. The host key is still
+verified against the `known_hosts` entry of `ansible_host` (`HostKeyAlias`), so no new key
+confirmation is needed and a different key is rejected. The working address is used for every
+later connection to that node (SSH and SCP, also from parallel workers), shown once
+(`<node>: ansible_host <ip> tidak bisa dihubungi, memakai alamat ctlplane <addr>`), and logged
+(`SSH_FALLBACK ... result=SUCCESS|FAILED`, `addr=` in `PRECHECK` / `DISCOVERY`). If every address
+fails, the node is skipped as `unreachable`.
 
 **Pre-check** (one SSH call per node): `/etc/rhosp-release` (a different version than the
 undercloud is a warning), `rpm -q sos`, `sos` present, passwordless `sudo`, free space in

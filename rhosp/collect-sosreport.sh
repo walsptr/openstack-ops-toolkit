@@ -411,7 +411,7 @@ precheck_node() {
 
     log_event PRECHECK "host=${N_NAME[$i]}" "ip=${N_IP[$i]}" "rhosp_release=${PC_RELEASE:--}" \
         "sos_rpm=${PC_RPM:--}" "sos=${PC_SOS:--}" "sudo=${PC_SUDO:--}" \
-        "free_kb=${PC_FREE:--}" "epoch=${PC_EPOCH:--}" "result=${N_RESULT[$i]:-OK}" "reason=${N_MSG[$i]:--}"
+        "free_kb=${PC_FREE:--}" "epoch=${PC_EPOCH:--}" "result=${N_RESULT[$i]:-OK}" "reason=${N_MSG[$i]:--}" "addr=$(rhosp_node_addr "$i")"
 
     if (( ! N_LOCAL[i] )) && [[ -n "$PC_RELEASE" && "$PC_RELEASE" != "$UC_RELEASE" ]]; then
         warn "${N_NAME[$i]}: rhosp-release berbeda dengan undercloud (${PC_RELEASE} vs ${UC_RELEASE})"
@@ -440,6 +440,7 @@ precheck_nodes() {
         printf '  %-28s %-10s %-12s %s\n' "${N_NAME[$i]}" "$(release_version "${N_RELEASE[$i]}")" \
             "$(is_uint "$free" && human_kb "$free" || printf -- '-')" "$status"
     done
+    rhosp_report_fallbacks "${SEL[@]}"
 
     for i in "${low[@]}"; do
         if (( DRY_RUN )); then

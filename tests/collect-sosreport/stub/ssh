@@ -12,10 +12,15 @@ set -o nounset
 S="${STUB_STATE:?STUB_STATE belum diset}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 shk=""
+hkalias=""
 
 while (( $# > 0 )); do
     case "$1" in
-        -o) [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"; shift 2 ;;
+        -o)
+            [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"
+            [[ "$2" == HostKeyAlias=* ]] && hkalias="${2#*=}"
+            shift 2
+            ;;
         -i|-p) shift 2 ;;
         --) shift; break ;;
         -*) shift ;;
@@ -27,6 +32,8 @@ dest="$1"
 shift
 cmd="$*"
 host="${dest#*@}"
+# Seperti ssh: HostKeyAlias menggantikan nama host untuk known_hosts
+hkname="${hkalias:-$host}"
 hd="$S/hosts/$host"
 
 printf 'ssh\t%s\t%s\t%s\n' "$host" "$shk" "${cmd//$'\n'/ ; }" >> "$S/calls.log"
@@ -63,12 +70,12 @@ MSG
 fi
 
 # Host key: "yes" butuh entry di known_hosts; "accept-new" menambahkannya
-if ! ssh-keygen -F "$host" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+if ! ssh-keygen -F "$hkname" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
     if [[ "$shk" == "accept-new" ]]; then
-        printf '%s %s\n' "$host" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
-        echo "Warning: Permanently added '$host' (ED25519) to the list of known hosts." >&2
+        printf '%s %s\n' "$hkname" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
+        echo "Warning: Permanently added '$hkname' (ED25519) to the list of known hosts." >&2
     else
-        echo "No ED25519 host key is known for $host and you have requested strict checking." >&2
+        echo "No ED25519 host key is known for $hkname and you have requested strict checking." >&2
         echo "Host key verification failed." >&2
         exit 255
     fi

@@ -494,6 +494,27 @@ test_precheck() {
     expect_match "ringkasan memuat alasan" "$(screen_text)" 'overcloud-computeiha-1 +ComputeInstanceHA .*SKIPPED .*sudo failed'
 }
 
+# ansible_host tidak terjangkau => ssh dan scp lewat alamat ctlplane
+test_fallback() {
+    local rc alt=overcloud-computeiha-0.ctlplane.example.com
+    begin "fallback_ctlplane"
+    no_instance_ha
+    cp -a "$WORK/state/hosts/$P0" "$WORK/state/hosts/$alt"
+    host_env "$P0" UNREACHABLE=1
+    start "" --node overcloud-computeiha-0 --dest "$WORK/dest" || return 0
+    answer 'Lanjutkan mengumpulkan sosreport dari 1 node' 1 y || return 0
+    answer 'Hapus file sosreport di 1 node' 1 y || return 0
+    rc="$(tmux_exit)"
+    expect_eq "exit code 0" "$rc" "0"
+    expect_eq "SUCCESS lewat ctlplane" "$(tsv 6 overcloud-computeiha-0)/$(tsv 12 overcloud-computeiha-0)" "SUCCESS/checksum ok"
+    expect_match "operator diberi tahu" "$(screen_text)" "overcloud-computeiha-0: ansible_host $P0 tidak bisa dihubungi, memakai alamat ctlplane"
+    expect_true "sos report lewat alamat ctlplane" grep -qE "^ssh"$'\t'"$alt"$'\t'".*sos report" "$WORK/state/calls.log"
+    expect_true "scp lewat alamat ctlplane" grep -qE "^scp"$'\t'"$alt"$'\t' "$WORK/state/calls.log"
+    expect_eq "ansible_host hanya dicoba sekali" "$(grep -c "^ssh"$'\t'"$P0"$'\t' "$WORK/state/calls.log")" "1"
+    expect_match "log SSH_FALLBACK" "$(log_text)" "SSH_FALLBACK host=overcloud-computeiha-0 ansible_host=$P0 addr=$alt result=SUCCESS"
+    expect_true "known_hosts tanpa entry baru" sh -c "! grep -q '^$alt ' '$WORK/home/.ssh/known_hosts'"
+}
+
 test_case_id() {
     local rc
     begin "case_id"
@@ -1017,7 +1038,7 @@ bash $(printf '%q' "$ROOT/main.sh") --workdir $(printf '%q' "$pw") --rc $(printf
 # Run
 # ============================================================
 
-ALL_TESTS=(fencing_basic release inventory_search inventory_parse picker hostkeys precheck case_id
+ALL_TESTS=(fencing_basic release inventory_search inventory_parse picker hostkeys precheck fallback case_id
     locate copy cluster_membership cluster_unknown cluster_unhealthy pcs_parser already_false
     phase_order disable_verify_fail parallel interrupt restore_fail stale_state dry_run platform_tui)
 for t in "${ALL_TESTS[@]}"; do
