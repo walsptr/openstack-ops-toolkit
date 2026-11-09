@@ -1,0 +1,4 @@
+[
+  {"ID": "default", "Name": "Default", "Enabled": true, "Description": "The default domain"},
+  {"ID": "d0000000000000000000000000000002", "Name": "Cust, \"Dom\"", "Enabled": true, "Description": ""}
+]

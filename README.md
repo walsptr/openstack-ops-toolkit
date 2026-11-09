@@ -203,6 +203,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Upload Image | images | `images/upload-img.sh` | yes | Upload an image to Glance with progress, sharing, and checksum verification |
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | IP Information | network | `network/get-ip-info.sh` | no | Find who uses an IP: floating IPs and port fixed IPs (single IP or list) |
+| List Routers | network | `network/list-routers.sh` | no | Daftar router beserta IP publik, network publik, project, dan domain → CSV di /tmp |
 | Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
 | Search Container Logs | rhosp | `rhosp/search-container-logs.sh` | no | Search a keyword in OpenStack container logs across RHOSP nodes |
 | View Container Logs | rhosp | `rhosp/view-container-logs.sh` | no | Search and read OpenStack container logs on RHOSP nodes (tail, follow) |
@@ -825,6 +826,52 @@ There is no compatibility shim at the old path:
   itself is not changed. Without an update, such an entry shows `⚠️ script tidak ditemukan`;
 - old logs stay in `log/network/get-float-ip-info-*.log`; new runs log to `get-ip-info-*.log`.
 
+### List Routers (`network/list-routers.sh`)
+
+Read-only export of **all routers in the active region** (all projects) with their public gateway
+IPs, public network, project, and domain to a CSV. Requires an admin role and `jq`; `curl` is optional.
+No prompts, so it also runs from cron.
+
+```bash
+network/list-routers.sh                         # auto method, /tmp/list-routers-<region>-<ts>.csv
+network/list-routers.sh --with-gateway-only
+network/list-routers.sh --extended --output /var/tmp/routers.csv
+```
+
+| Option | Meaning |
+|---|---|
+| `--method auto\|api\|cli` | `cli`: `router list --long -f json`; fails with a clear message when its gateway info is incomplete. `api`: `GET /v2.0/routers` with `curl` (`lib/api.sh`, pagination). `auto` (default): `cli` when complete, otherwise `api`; always `api` with `--extended` |
+| `--output PATH` | CSV path (must not exist; the directory must exist) |
+| `--extended` | Add `Project ID,Domain ID,Public Network ID,Status,Admin State,SNAT,HA,Distributed,Created At,Updated At` |
+| `--with-gateway-only` | Only write routers that have an external gateway (the summary still counts all) |
+
+```
+Router ID,Router Name,Public IP,Public Network Name,Project Name,Domain Name
+```
+
+- *Public IP*: all `external_gateway_info.external_fixed_ips` addresses joined with `;`, IPv4 first
+  (numeric order), then IPv6 in canonical form (`lib/netinfo.sh`). Routers without a gateway are kept,
+  with *Public IP* and *Public Network Name* empty.
+- Data is fetched in bulk and joined with `jq` (no `router show` per router): routers, `network list`
+  (includes external networks owned by other projects), `project list --long` (domain ID), and
+  `domain list`. Neutron returns the routers of all projects to an admin; OSC has no `--all-projects` for
+  routers and none is needed. The tests check that `cli` and `api` return the same routers.
+- A project, domain, or network that no longer exists is written as `(not found: <id>)` (the domain of a
+  deleted project is unknown and stays empty); a failed lookup (e.g. 403/503) is
+  `(lookup failed: <id>)`, the CSV is still written, and the exit code is 1.
+- *Admin State* is `UP`/`DOWN`; *SNAT*, *HA*, *Distributed* are `true`/`false`, or empty when the field
+  does not exist in the region (no `l3-ha` / `dvr` extension) or the router has no gateway (SNAT).
+- `router list` never shows `created_at`/`updated_at` (OSC 5.5.x and 7.1.x), so `--extended` needs the
+  API: `--method cli --extended` is rejected.
+- Rows are sorted by project name, router name, router ID. The file is created with permission 600 and
+  never overwrites an existing file. Without `OS_REGION_NAME` (e.g. `OS_CLOUD`), the region comes from
+  the network endpoint in the catalog when there is only one, otherwise `unknown`.
+
+Audit: options, region, method (and why `auto` chose it), one `RESULT action=lookup` each for routers,
+networks, projects, and domains, and a `SUMMARY` with counts and the CSV path (no router data).
+Environment: `OSOPS_CURL`, `OSOPS_ROUTER_PAGE_LIMIT` (API page size, default none),
+`OSOPS_ROUTERS_OUTPUT_DIR` (default `/tmp`).
+
 ### Collect sosreport (`rhosp/collect-sosreport.sh`)
 
 Collects `sosreport` from selected **Red Hat OpenStack Platform 17.1** nodes and copies the
@@ -1281,6 +1328,7 @@ bash tests/upload-img/run.sh
 bash tests/collect-public-fip/run.sh
 bash tests/list-instances-by-host/run.sh
 bash tests/get-ip-info/run.sh
+bash tests/list-routers/run.sh
 bash tests/collect-sosreport/run.sh
 bash tests/create-vm/run.sh
 bash tests/view-container-logs/run.sh

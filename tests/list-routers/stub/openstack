@@ -1,0 +1,112 @@
+#!/bin/bash
+# Stub OpenStack CLI untuk tests/list-routers (dipakai lewat OSOPS_OS_CMD).
+# Hanya perintah read-only yang dikenali; perintah lain dicatat dan exit 2.
+#
+# State di $STUB_STATE:
+#   calls.log      setiap pemanggilan (argv)
+#   routers.json   override fixtures/routers.json (opsional)
+#   scen/<nama>    skenario (tidak ada = default)
+#
+# Skenario:
+#   cli_gw     object (default, OSC 5.5.x/7.1.2: dict mentah)
+#              | string (JSON di dalam string)
+#              | old    (string gaya dict Python, tidak bisa diparse)
+#              | nofips (object tanpa external_fixed_ips)
+#              | nokey  (tanpa kolom "External gateway info")
+#   noext      1 = tanpa ekstensi l3-ha/dvr (field ha/distributed tidak ada)
+#   routers    ok (default) | fail
+#   networks / projects / domains   ok (default) | fail
+#   catalog    ok (default) | fail | multi (dua region)
+
+# shellcheck disable=SC2016  # filter jq di dalam kutip tunggal (disengaja)
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubTOKENrahasia-0123456789"
+
+printf '%s\n' "$*" >> "$STUB_STATE/calls.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+routers() {
+    local f="$FIX/routers.json"
+    [[ -f "$STUB_STATE/routers.json" ]] && f="$STUB_STATE/routers.json"
+    if [[ "$(scen noext 0)" == "1" ]]; then
+        jq '[ .[] | del(.ha, .distributed) ]' "$f"
+    else
+        cat "$f"
+    fi
+}
+
+fail_if() {
+    [[ "$(scen "$1" ok)" == "fail" ]] && { echo "${2:-Service Unavailable (HTTP 503)}" >&2; exit 1; }
+    return 0
+}
+
+case "$*" in
+    "router list --long -f json")
+        fail_if routers
+        # Seperti OSC ListRouter: HA/Distributed hanya jika ada nilai non-null,
+        # created_at/updated_at tidak pernah ditampilkan.
+        routers | jq --arg gw "$(scen cli_gw object)" --arg q "'" '
+            (any(.[]; .distributed != null)) as $hasd | (any(.[]; .ha != null)) as $hash
+            | [ .[] | { ID: .id, Name: .name, Status: .status, State: .admin_state_up, Project: .project_id }
+                + (if $hasd then { Distributed: .distributed } else {} end)
+                + (if $hash then { HA: .ha } else {} end)
+                + { Routes: "" }
+                + (if $gw == "nokey" then {}
+                   else { "External gateway info":
+                     (.external_gateway_info as $g
+                      | if $gw == "object" then $g
+                        elif $g == null then (if $gw == "nofips" then null else "null" end)
+                        elif $gw == "string" then ($g | tojson)
+                        elif $gw == "old" then "network_id=\($q)\($g.network_id)\($q), enable_snat=\($q)\($g.enable_snat)\($q)"
+                        elif $gw == "nofips" then ($g | del(.external_fixed_ips))
+                        else $g end) } end)
+                + { Tags: [] } ]'
+        ;;
+
+    "network list -f json")
+        fail_if networks
+        cat "$FIX/networks.json"
+        ;;
+
+    "project list --long -f json")
+        fail_if projects "You are not authorized to perform the requested action: identity:list_projects. (HTTP 403)"
+        cat "$FIX/projects.json"
+        ;;
+
+    "domain list -f json")
+        fail_if domains "You are not authorized to perform the requested action: identity:list_domains. (HTTP 403)"
+        cat "$FIX/domains.json"
+        ;;
+
+    "token issue -f json")
+        jq -n --arg t "$TOKEN" '{expires: "2099-01-01T00:00:00+0000", id: $t, project_id: "p", user_id: "u"}'
+        ;;
+
+    "catalog show network -f json")
+        case "$(scen catalog ok)" in
+            fail)  echo "Internal Server Error (HTTP 500)" >&2; exit 1 ;;
+            multi) r2="RegionDua" ;;
+            *)     r2="RegionTest" ;;
+        esac
+        jq -n --arg r2 "$r2" '{endpoints: [
+            {id: "e1", interface: "internal", region_id: "RegionTest", url: "http://neutron.internal:9696", region: "RegionTest"},
+            {id: "e2", interface: "public", region_id: "RegionTest", url: "https://neutron.test:9696/", region: "RegionTest"},
+            {id: "e3", interface: "admin", region_id: $r2, url: "http://neutron.admin:9696", region: $r2}],
+            id: "s1", name: "neutron", type: "network"}'
+        ;;
+
+    *)
+        echo "stub openstack: perintah tidak dikenal: $*" >&2
+        exit 2
+        ;;
+esac

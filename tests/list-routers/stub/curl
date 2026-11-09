@@ -1,0 +1,87 @@
+#!/bin/bash
+# Stub curl untuk tests/list-routers (dipakai lewat OSOPS_CURL).
+# Mensimulasikan Neutron API GET /v2.0/routers dengan pagination limit/marker.
+#
+# State di $STUB_STATE:
+#   curl.log        argv setiap pemanggilan
+#   curl_auth.log   "ok" / "missing" per pemanggilan (header token dari stdin -K -)
+#   scen/api        ok (default) | fail (HTTP 500)
+#   scen/noext      1 = tanpa field ha/distributed
+#
+# Link "next" sengaja memakai host lain (http://proxy-internal:9696) untuk
+# memastikan script memakai endpoint dari catalog.
+
+# shellcheck disable=SC2016
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+: "${STUB_STATE:?STUB_STATE belum diset}"
+FIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/../fixtures" && pwd)"
+TOKEN="gAAAAAstubTOKENrahasia-0123456789"
+
+printf '%s\n' "$*" >> "$STUB_STATE/curl.log"
+
+scen() {
+    local f="$STUB_STATE/scen/$1"
+    if [[ -f "$f" ]]; then cat "$f"; else echo "$2"; fi
+}
+
+out="" url="" cfg=""
+while (( $# > 0 )); do
+    case "$1" in
+        -K)  [[ "$2" == "-" ]] && cfg="$(cat)"; shift 2 ;;
+        -o)  out="$2"; shift 2 ;;
+        --connect-timeout|--max-time|--cacert|--cert|--key) shift 2 ;;
+        -*)  shift ;;
+        *)   url="$1"; shift ;;
+    esac
+done
+
+if [[ "$cfg" == *"header = \"X-Auth-Token: $TOKEN\""* ]]; then
+    echo ok >> "$STUB_STATE/curl_auth.log"
+else
+    echo missing >> "$STUB_STATE/curl_auth.log"
+    echo "curl: (22) The requested URL returned error: 401" >&2
+    exit 22
+fi
+
+if [[ "$(scen api ok)" == "fail" ]]; then
+    echo "curl: (22) The requested URL returned error: 500" >&2
+    exit 22
+fi
+
+path="${url%%\?*}"
+query=""
+[[ "$url" == *\?* ]] && query="${url#*\?}"
+qjson="$(jq -Rn --arg q "$query" '$q | split("&") | map(select(length > 0) | split("=") | [.[0], (.[1:] | join("="))])')"
+
+f="$FIX/routers.json"
+[[ -f "$STUB_STATE/routers.json" ]] && f="$STUB_STATE/routers.json"
+
+case "$path" in
+    https://neutron.test:9696/v2.0/routers)
+        body="$(jq --argjson q "$qjson" --argjson noext "$(scen noext 0)" '
+            ($q | map(select(.[0] == "limit") | .[1] | tonumber)[0] // 0) as $limit
+            | ($q | map(select(.[0] == "marker") | .[1])[0] // null) as $marker
+            | [ .[] | if $noext == 1 then del(.ha, .distributed) else . end ] | sort_by(.id) as $all
+            | (if $marker == null then $all else [ $all[] | select(.id > $marker) ] end) as $rest
+            | (if $limit > 0 then $rest[0:$limit] else $rest end) as $page
+            | { routers: $page }
+              + (if $limit > 0 and ($page | length) == $limit then
+                   { routers_links: [ { rel: "next",
+                       href: "http://proxy-internal:9696/v2.0/routers?limit=\($limit)&marker=\($page[-1].id)" } ] }
+                 else {} end)' "$f")"
+        ;;
+    *)
+        echo "curl: (22) The requested URL returned error: 404 ($url)" >&2
+        exit 22
+        ;;
+esac
+
+if [[ -n "$out" ]]; then
+    printf '%s\n' "$body" > "$out"
+else
+    printf '%s\n' "$body"
+fi
