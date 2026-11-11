@@ -76,7 +76,8 @@ _log_operator() {
 # Sensor nilai variabel env rahasia, lalu escape agar satu event tetap
 # satu baris (\ -> \\, newline -> \n, CR -> \r). Hasil di _LOG_S.
 _log_clean() {
-    local name val
+    # IFS default: trap sinyal bisa berjalan saat "IFS= read" aktif (IFS kosong)
+    local name val IFS=$' \t\n'
 
     _LOG_S="$1"
 
@@ -237,6 +238,9 @@ log_init() {
 }
 
 _log_on_signal() {
+    # Sinyal bisa datang saat "IFS= read ..." menunggu input: IFS kosong masih
+    # berlaku di konteks trap; kembalikan default untuk hook dan logging
+    local IFS=$' \t\n'
     _LOG_SIGNAL="$1"
 
     if [[ -n "$LOG_INTERRUPT_HOOK" ]]; then
