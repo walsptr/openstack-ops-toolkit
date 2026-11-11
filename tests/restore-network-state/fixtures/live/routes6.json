@@ -1,0 +1,4 @@
+[
+ {"dst":"fd00:99:42::/64","gateway":"fd00:17::199","dev":"vlan20","protocol":"static","metric":4242,"flags":[],"pref":"medium"},
+ {"dst":"fe80::/64","dev":"br-ctlplane","protocol":"kernel","metric":256,"flags":[],"pref":"medium"}
+]

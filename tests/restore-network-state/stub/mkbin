@@ -1,0 +1,27 @@
+#!/bin/bash
+# mkbin DIR       — symlink tool node palsu (netstub) sesuai env host:
+#                   NO_SYSTEMD_RUN, NO_NFT
+# mkbin --sys DIR — symlink /usr/bin + /bin TANPA tool jaringan, systemd, pcs,
+#                   hostname, sudo asli
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$1" == --sys ]]; then
+    t="$(mktemp -d "$2.XXXXXX")"
+    for f in /usr/bin/* /bin/*; do
+        b="${f##*/}"
+        case "$b" in
+            ip|iptables*|ip6tables*|nft|sudo|xtables*|arptables*|ebtables*|systemctl|systemd-run|pcs|hostname) continue ;;
+        esac
+        [[ -e "$t/$b" ]] || ln -s "$f" "$t/$b" 2>/dev/null || true
+    done
+    mv -T "$t" "$2" 2>/dev/null || rm -rf "$t"
+    exit 0
+fi
+d="$1"
+mkdir -p "$d"
+rm -f "$d"/*
+for t in ip iptables iptables-save ip6tables-save iptables-restore ip6tables-restore nft sudo systemctl systemd-run pcs hostname; do
+    [[ "$t" == systemd-run && "${NO_SYSTEMD_RUN:-0}" == 1 ]] && continue
+    [[ "$t" == nft && "${NO_NFT:-0}" == 1 ]] && continue
+    ln -sfn "$HERE/netstub" "$d/$t"
+done
+exit 0

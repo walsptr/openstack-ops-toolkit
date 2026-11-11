@@ -61,6 +61,7 @@
 #                                  (tanpa banner sshd di output)
 #   scp_fetch IDX SRC DST TIMEOUT
 #   ssh_fail_reason STDERR RC      alasan SKIPPED (host key mismatch, auth, ...)
+#   RHOSP_SSH_EXTRA=(...)          opsi ssh tambahan (array, bisa di-local-kan)
 #   log_accepted_key IDX           catat fingerprint host key yang baru diterima
 #
 # Variabel yang diisi script sebelum memanggil fungsi: INVENTORY, NODE_ARGS,
@@ -637,6 +638,7 @@ rhosp_select_nodes() {
 # ============================================================
 
 SSH_OPTS=()
+RHOSP_SSH_EXTRA=()
 
 # Identitas host key node IDX di known_hosts: ansible_host (dengan [..]:port
 # untuk port selain 22), juga saat koneksi lewat alamat fallback
@@ -660,6 +662,9 @@ build_ssh_opts() {
     [[ "$addr" != "${N_IP[$i]}" ]] && SSH_OPTS+=(-o "HostKeyAlias=$(_rhosp_hk_id "$i")")
     [[ -n "${N_KEY[$i]}" && -r "${N_KEY[$i]}" ]] && SSH_OPTS+=(-i "${N_KEY[$i]}")
     [[ -n "${N_PORT[$i]}" ]] && SSH_OPTS+=("$port_flag" "${N_PORT[$i]}")
+    # Opsi tambahan dari pemanggil (mis. koneksi baru tanpa multiplexing:
+    # local RHOSP_SSH_EXTRA=(-o ControlMaster=no -o ControlPath=none))
+    if (( ${#RHOSP_SSH_EXTRA[@]} > 0 )); then SSH_OPTS+=("${RHOSP_SSH_EXTRA[@]}"); fi
     return 0
 }
 

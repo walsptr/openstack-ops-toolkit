@@ -1,0 +1,9 @@
+[
+ {"dst":"default","gateway":"192.168.24.1","dev":"br-ctlplane","protocol":"static","flags":[]},
+ {"dst":"10.99.42.0/24","gateway":"172.17.0.199","dev":"vlan20","protocol":"static","metric":4242,"flags":[]},
+ {"dst":"10.98.0.0/16","gateway":"172.17.0.198","dev":"vlan20","protocol":"static","metric":100,"flags":[]},
+ {"dst":"192.168.24.0/24","dev":"br-ctlplane","protocol":"kernel","scope":"link","prefsrc":"192.168.24.21","flags":[]},
+ {"dst":"169.254.169.254","gateway":"192.168.24.1","dev":"br-ctlplane","protocol":"static","flags":[]},
+ {"type":"local","dst":"192.168.24.21","table":"local","dev":"br-ctlplane","protocol":"kernel","scope":"host","prefsrc":"192.168.24.21","flags":[]},
+ {"dst":"10.88.0.0/16","gateway":"172.17.0.1","dev":"vlan20","protocol":"static","table":"4242","flags":[]}
+]

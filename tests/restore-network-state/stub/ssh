@@ -1,0 +1,109 @@
+#!/bin/bash
+# Stub ssh untuk tests/restore-network-state (meniru sshd, lihat juga
+# tests/backup-network-state/stub/ssh):
+#  - perintah "remote" dijalankan dengan bash di direktori palsu per host
+#    ($STUB_STATE/hosts/<ip>/); PATH = stub (netstub) + symlink /usr/bin tanpa
+#    tool jaringan/systemd/pcs/hostname asli
+#  - path node dipetakan ke direktori host: /var/lib/osops-restore,
+#    /tmp/osops-restore-, /tmp/osops-netstate- (stdin kolektor), "find /tmp "
+#  - proses remote DILEPAS (setsid); stdout lewat FIFO yang dibaca stub
+#  - firewall: jika iptables live node berisi "BLOCKSSH", koneksi BARU gagal
+#    (Connection timed out), seperti aturan yang memblok SSH setelah apply
+#    (kecuali ada hosts/<ip>/allow-ssh: dipakai saat membuat backup)
+# Perilaku per host (hosts/<ip>/env): UNREACHABLE, HOSTKEY_CHANGED, AUTH_FAIL +
+# variabel netstub.
+set -o nounset
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shk="" hkalias="" cm="" cpath=""
+
+while (( $# > 0 )); do
+    case "$1" in
+        -o)
+            case "$2" in
+                StrictHostKeyChecking=*) shk="${2#*=}" ;;
+                HostKeyAlias=*) hkalias="${2#*=}" ;;
+                ControlMaster=*) cm="${2#*=}" ;;
+                ControlPath=*) cpath="${2#*=}" ;;
+            esac
+            shift 2 ;;
+        -i|-p) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+dest="$1"
+shift
+cmd="$*"
+host="${dest#*@}"
+hkname="${hkalias:-$host}"
+hd="$S/hosts/$host"
+
+printf 'ssh\t%s\tcm=%s,cp=%s\t%s\n' "$host" "${cm:--}" "${cpath:--}" "${cmd//$'\n'/ ; }" >> "$S/calls.log"
+
+if [[ ! -d "$hd" ]]; then
+    echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+    exit 255
+fi
+
+UNREACHABLE=0 HOSTKEY_CHANGED=0 AUTH_FAIL=0
+set -a
+# shellcheck disable=SC1091
+[[ -f "$hd/env" ]] && source "$hd/env"
+set +a
+
+if [[ "$UNREACHABLE" == 1 ]] || { [[ ! -e "$hd/allow-ssh" ]] && grep -q BLOCKSSH "$hd/live/ipt4" 2>/dev/null; }; then
+    sleep 0.3
+    echo "ssh: connect to host $host port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$HOSTKEY_CHANGED" == 1 ]]; then
+    echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2
+    echo "Host key verification failed." >&2
+    exit 255
+fi
+if ! ssh-keygen -F "$hkname" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+    if [[ "$shk" == "accept-new" ]]; then
+        printf '%s %s\n' "$hkname" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
+    else
+        echo "Host key verification failed." >&2
+        exit 255
+    fi
+fi
+if [[ "$AUTH_FAIL" == 1 ]]; then
+    echo "tripleo-admin@$host: Permission denied (publickey)." >&2
+    exit 255
+fi
+
+mkdir -p "$hd/tmp" "$hd/var/lib"
+"$HERE/mkbin" "$hd/bin"
+sysbin="$S/sysbin"
+[[ -d "$sysbin" ]] || "$HERE/mkbin" --sys "$sysbin"
+
+tmp="$(mktemp -d "$S/ssh.XXXXXX")"
+# shellcheck disable=SC2016  # string literal perintah kolektor
+if [[ "$cmd" == *'bash -c "$(cat)"'* ]]; then
+    sed "s#/tmp/osops-netstate-#$hd/tmp/osops-netstate-#g" > "$tmp/in"
+else
+    cat > "$tmp/in"
+fi
+c="${cmd//find \/tmp /find $hd/tmp }"
+c="${c//\/var\/lib\/osops-restore/$hd/var/lib/osops-restore}"
+c="${c//\/tmp\/osops-restore-/$hd/tmp/osops-restore-}"
+
+mkfifo "$tmp/out"
+export STUB_HOST="$host" STUB_HD="$hd"
+# shellcheck disable=SC2016  # $1..$5 milik bash -c di dalam
+( PATH="$hd/bin:$sysbin" setsid bash -c 'bash -c "$1" < "$2" > "$3" 2> "$4"; echo $? > "$5.tmp"; mv "$5.tmp" "$5"' \
+    remote "$c" "$tmp/in" "$tmp/out" "$tmp/err" "$tmp/rc" & ) < /dev/null > /dev/null 2>&1
+cat "$tmp/out"
+while [[ ! -e "$tmp/rc" ]]; do
+    sleep 0.05
+done
+rc="$(cat "$tmp/rc")"
+sed -e "s#$hd/tmp#/tmp#g" -e "s#$hd/var/lib#/var/lib#g" "$tmp/err" >&2
+rm -rf "$tmp"
+exit "$rc"

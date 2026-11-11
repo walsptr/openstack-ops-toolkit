@@ -1,0 +1,6 @@
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+-A INPUT -s fd00:99:42::7/128 -m comment --comment "OSOPS-RULE-MARKER-ipt6" -j DROP
+COMMIT

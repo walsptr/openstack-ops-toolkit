@@ -1,0 +1,14 @@
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+table ip filter {
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		ip saddr 10.99.42.7 counter packets 3 bytes 180 drop comment "OSOPS-RULE-MARKER-nftipt"
+	}
+}
+table inet tripleo_firewall {
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		tcp dport 22 counter packets 100 bytes 6400 accept
+		ip saddr 10.99.42.8 counter packets 7 bytes 420 drop comment "OSOPS-RULE-MARKER-nft"
+	}
+}

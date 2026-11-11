@@ -34,6 +34,8 @@ lib/rhosp.sh          Shared helper for RHOSP scripts: rhosp-release/user check,
                       (ansible_host, fallback to ctlplane_ip / ctlplane_hostname on connection failure)
 lib/containerlogs.sh  Shared helper for the container log scripts: discovery of /var/log/containers (one SSH per node = pre-check), path
                       validation, rotated-file mapping, file picker + internal --_preview, pager, saving results (600, noclobber)
+lib/netstate.sh       Shared helper for backup/restore-network-state: static read-only collector (route/rule, iptables, nftables), archive validation,
+                      manifest/SHA256SUMS writing, validation of existing backups (ns_verify_run)
 tests/<name>/         Test runners, stub CLIs, fixtures — never listed in the TUI, never installed
 .shellcheckrc         shellcheck settings (source paths relative to each script)
 log/                  Runtime logs (not tracked by git): toolkit.log + log/<category>/<script>-YYYYMMDD.log
@@ -224,6 +226,7 @@ bash tests/view-container-logs/run.sh       # view-container-logs + lib/rhosp.sh
 bash tests/search-container-logs/run.sh     # search-container-logs (same stubs; real find/grep/zgrep/xargs/nice/ionice/timeout)
 bash tests/list-routers/run.sh              # list-routers (stub CLI + stub curl: cli/api, pagination, incomplete CLI gateway info)
 bash tests/backup-network-state/run.sh      # backup-network-state (stub ssh with detached remote + /tmp map, stub sudo/ip/iptables*/nft; real iptables/nft in unshare -rn when available)
+bash tests/restore-network-state/run.sh     # restore-network-state (stateful fake node: live iptables/nft/routes, systemd-run timers, pcs; real iptables/nft in unshare -rn; ~15 min)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)

@@ -206,6 +206,7 @@ Generated with `bash main.sh --workdir . --list`:
 | List Routers | network | `network/list-routers.sh` | no | Daftar router beserta IP publik, network publik, project, dan domain → CSV di /tmp |
 | Backup Network State | rhosp | `rhosp/backup-network-state.sh` | no | Backup ip route/rule, iptables, dan nftables dari node overcloud ke undercloud |
 | Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
+| Restore Network State | rhosp | `rhosp/restore-network-state.sh` | yes | Restore iptables/nftables (dan route/rule terbatas) satu node dari backup, dengan dry-run dan auto-rollback |
 | Search Container Logs | rhosp | `rhosp/search-container-logs.sh` | no | Search a keyword in OpenStack container logs across RHOSP nodes |
 | View Container Logs | rhosp | `rhosp/view-container-logs.sh` | no | Search and read OpenStack container logs on RHOSP nodes (tail, follow) |
 | Create VM | servers | `servers/create-vm.sh` | yes | Create an instance (boot from image or volume) with distro-aware cloud-init |
@@ -1078,35 +1079,106 @@ that is not accepted, is `SKIPPED`. The log `log/rhosp/backup-network-state-YYYY
 counts, statuses, item names and paths — never rule or route content (nft error messages are reduced
 to `line N: Error: ...`).
 
-#### Manual restore (the script never restores)
-
-> ⚠️ **Restoring can cut off a node.** On TripleO nodes the firewall is managed by director
-> (`tripleo_firewall` / nftables rules from the deployment) and by neutron/OVN agents; a restored
-> ruleset can conflict with that and will be overwritten by the next deploy or agent sync. Prefer
-> fixing the cause (deploy, agent restart). Use a console (not only SSH), test first, and restore
-> only the table you need.
-
-```bash
-# Check first (applies nothing)
-sudo iptables-restore --test < iptables-v4.rules
-sudo nft -c -f nftables.ruleset
-
-# iptables / ip6tables (also the right tool for tables that contain "xt match"/"xt target":
-# those iptables-nft compat tables cannot be restored with nft -f)
-sudo iptables-restore < iptables-v4.rules
-sudo ip6tables-restore < iptables-v6.rules
-
-# nftables: the file has no "flush ruleset" — loading adds to the current rules.
-# Delete only the table you replace, e.g.:
-sudo nft delete table inet tripleo_firewall
-sudo nft -f nftables.ruleset          # or a file with only that table
-
-# Routes / rules: re-add individual entries by hand (ip route add ..., ip rule add ...);
-# never replay the whole file (kernel and agent routes are in it).
-```
+Restoring: the backup script never restores anything. Use **Restore Network State**
+(`rhosp/restore-network-state.sh`, below): dry-run diff by default, one node, runtime only, always
+with auto-rollback.
 
 Environment (mainly for tests): `OSOPS_BACKUP_DIR`, `OSOPS_SSH`, `OSOPS_ANSIBLE_INVENTORY`, `OSOPS_FZF`,
 `OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`.
+
+### Restore Network State (`rhosp/restore-network-state.sh`)
+
+Restores the **runtime** iptables/ip6tables, nftables and (limited) routes/rules of **one** overcloud
+node from a Backup Network State run. Modifies resources: **yes**. Default is a **dry-run** that only
+shows the diff between the backup and the node now; nothing changes without `--apply`, and `--apply`
+always runs with an automatic rollback on the node. Marked `@platform: rhosp`.
+
+```bash
+# Dry-run: diff only (pickers for backup run, host and items when run from the TUI)
+rhosp/restore-network-state.sh --backup-dir ~/osops-backups/network-state/<run_id> \
+    --host overcloud-controller-0 --items iptables-v4,routes-v4
+
+# Apply (terminal required: type the hostname, then RESTORE; confirm again after the checks)
+rhosp/restore-network-state.sh --backup-dir ... --host overcloud-controller-0 --items iptables-v4 --apply
+
+# Unfinished restore of a node: check (read-only), then clean up once it is finished
+rhosp/restore-network-state.sh --status --host overcloud-controller-0
+rhosp/restore-network-state.sh --clear-state --host overcloud-controller-0
+```
+
+| Option | Description |
+|---|---|
+| `--backup-dir DIR`, `--host HOST` | Backup run (`<...>/network-state/<run_id>/`, also `*-pre-restore`) and host in it; pickers without them (the run picker shows the age) |
+| `--items LIST` | Required (no "all"): `iptables-v4`, `iptables-v6`, `nftables`, `routes-v4`, `routes-v6`, `rules-v4`, `rules-v6`. `netns` is refused (managed by OVN/neutron agents) |
+| `--apply` | Apply (default dry-run) |
+| `--rollback-timeout SEC` | Rollback timer on the node, default 180, 120–900. No option to extend it |
+| `--save-diff FILE` | Full diff to FILE (`600`, never overwritten); otherwise the diff is only shown on the terminal |
+| `--status`, `--clear-state` | See "State" below |
+
+**Validation before anything else**: `SHA256SUMS` and the sha256/size in `MANIFEST.tsv`, the file
+structure, and permissions (directories `700`, files `600`, owned by the operator). The hostname in
+`meta.json` must equal `hostname -f` on the node, and the iptables backend (`nf_tables`/`legacy`) must
+be the same — no override. Items that are not `OK` in the manifest, or whose verification `FAILED`,
+cannot be chosen. On `nf_tables`, `nftables` cannot be combined with `iptables-v4/v6`: the nftables
+ruleset already contains the iptables-nft tables (the diff says so). On `legacy` the combination is
+allowed (iptables first, then nft). `nftables` is refused when the backup or the current ruleset
+contains `xt` expressions (use `iptables-v4/v6`; the current one would make the rollback impossible).
+
+**How items are applied** (runtime only — `/etc/sysconfig/iptables*`, `/etc/nftables/*`, director
+config and services are never touched; **a reboot or the next director run restores the director
+configuration**):
+
+| Item | Apply | Rollback |
+|---|---|---|
+| `iptables-v4/v6` | `iptables-restore` of the backup file (atomic per table; tables not in the backup are left alone). Checked first with `--test` | `iptables-restore` of the pre-restore copy. Tables created by the restore are deleted (`nft delete table`, nf_tables) or **only emptied** (legacy — listed in the summary) |
+| `nftables` | One atomic batch `flush ruleset` + backup via `nft -f`, checked first with `nft -c -f` on the same batch | `flush ruleset` + pre-restore ruleset |
+| `routes-*`, `rules-*` | **Add-missing only** (from the `ip -j` JSON): entries in the backup that are missing now are added. Never deletes; `proto kernel`, link-local, the default route and the `local` table are never touched. Extra entries, changed attributes and default route differences are only listed as "manual action" | Deletes exactly the entries that were added |
+
+**Flow of `--apply`**: diff and counts → region/stack, node, role, items, backup age → cluster check for
+Pacemaker members (all nodes Online via `pcs status nodes` on another Controller; `stonith-enabled`
+shown, warning when false) → `sudo -n`, `systemd-run`, tools → `flock` per node, warning outside
+tmux/screen → type the hostname, then `RESTORE` → **pre-restore snapshot** of the node to
+`<backup-base>/<run_id>-pre-restore/` (same format as a backup; if it fails, nothing happens) → the
+recomputed diff must equal the one shown → upload over SSH stdin to `/var/lib/osops-restore/<run_id>/`
+(root, `700`/`600`; the directory must not exist; the archive list is checked first: static names,
+files/directories only) → verification on the node (`iptables-restore --test`, `nft -c -f`, also for the
+pre-restore copy) → **rollback timer** → apply → checks:
+
+1. a **new** SSH connection (`ControlMaster=no`, `ControlPath=none`);
+2. Pacemaker members: from another Controller, `pcs status nodes` 3× over ~20 s: the node stays Online
+   and the Online set is unchanged;
+3. rule/route counts after apply equal the expected counts (on mismatch the item and table with both
+   counts are shown — a neutron/OVN agent changing rules in between also triggers the rollback).
+
+When all checks pass and at least 45 s of the timer remain, type the hostname within the remaining time
+to **keep** the change: the timer is stopped and the node copy deleted. Otherwise (check failed, no or
+wrong answer, less than 45 s left, `Ctrl-C`, lost connection) the timer is **never** cancelled: the
+rollback runs (triggered early when a check fails), is verified over a new connection, and reported.
+
+Rollback unit: `systemd-run --unit=osops-restore-rb-<run_id> --on-active=<N>s
+--timer-property=AccuracySec=1s --property=Type=oneshot --property=TimeoutStartSec=120 /bin/bash
+/var/lib/osops-restore/<run_id>/agent.sh rollback` — a transient timer owned by PID 1, independent of
+the SSH session (not kept across a reboot, which reloads the director configuration anyway). The
+rollback first checks `sha256sum -c` of its files; on failure it changes nothing and writes
+`rollback.result` = `FAILED` (integrity), shown as **CRITICAL** with the path of the pre-restore
+snapshot for a manual restore. Known detail: after an iptables rollback on nf_tables, `iptables-save`
+is identical to before, while `nft list ruleset` may list tables in another order and show empty
+built-in chains (policy ACCEPT) that `iptables` had created lazily — functionally the same.
+
+**State**: `log/rhosp/restore-network-state-<host>.state` (`600`: run id, items, phase, timer unit,
+pre-restore path) is written before the upload and removed only after a confirmation or a verified
+rollback. While it exists, `--apply` for that node is refused (dry-run still works). `--status` shows the
+timer, the rollback service, applied items and `rollback.result` (read-only, verifying a finished
+rollback). `--clear-state` removes the state file and the node directory only when nothing is pending
+and the rollback (if any) is verified; it asks to type the hostname. States: `PENDING_ROLLBACK`,
+`ROLLBACK_RUNNING`, `ROLLED_BACK`, `ROLLBACK_FAILED` (critical), `CONFIRMED`, `NOT_APPLIED`,
+`APPLIED_NO_TIMER` (e.g. node rebooted).
+
+Summary per item: `APPLIED`, `ROLLED_BACK`, `NOT_APPLIED` (with reason), `ROLLBACK_FAILED` (critical),
+plus the manual-action list. Exit code 0 (applied, dry-run or nothing to do), 1 (rolled back), 2
+(critical: rollback failed or not verified). The log has items, change counts, check results,
+confirmation/rollback events and `log_result` per item (`SUCCESS`, `FAILED`, `DECLINED`, `ABORTED`) —
+never rule or route content.
 
 ### View Container Logs (`rhosp/view-container-logs.sh`) and Search Container Logs (`rhosp/search-container-logs.sh`)
 
@@ -1403,7 +1475,7 @@ Relative paths resolve against the workdir. Existing `scripts.env` files in the 
 ├── install.sh              # Installer with requirement checks
 ├── scripts.env.example     # Example of the optional local override file
 ├── CLAUDE.md               # Architecture and contribution guide
-├── lib/                    # Shared helpers for scripts (logging.sh, api.sh, netinfo.sh, rhosp.sh, containerlogs.sh), never listed in the TUI
+├── lib/                    # Shared helpers for scripts (logging.sh, api.sh, netinfo.sh, rhosp.sh, containerlogs.sh, netstate.sh), never listed in the TUI
 ├── log/                    # Logs, created at runtime / by install.sh (not tracked by git)
 ├── tests/                  # Test stubs, fixtures and runners (not listed, not installed)
 ├── identity/               # Identity (Keystone) scripts
@@ -1427,7 +1499,9 @@ and an inventory fixture (needs `ssh-keygen`). `rhosp/view-container-logs.sh` an
 `/var/log/containers` tree per host, plus stub `sudo`/`fzf`/`less` (needs `setsid`, `gzip`).
 `rhosp/backup-network-state.sh` runs its real remote script through a stub `ssh` (detached remote,
 `/tmp` mapped per host) with stub `sudo`/`ip`/`iptables*`/`nft`; the `real_verify` test also uses
-real `iptables`/`nft` inside `unshare -rn` when available:
+real `iptables`/`nft` inside `unshare -rn` when available. `rhosp/restore-network-state.sh` runs against a
+stateful fake node (live iptables/nft/route/rule state, transient `systemd-run` timers, `pcs`), with
+backups made by the real backup script; some tests wait for the 120 s rollback timer (~15 min in total):
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
@@ -1443,6 +1517,7 @@ bash tests/create-vm/run.sh
 bash tests/view-container-logs/run.sh
 bash tests/search-container-logs/run.sh
 bash tests/backup-network-state/run.sh
+bash tests/restore-network-state/run.sh
 ```
 
 ## Troubleshooting

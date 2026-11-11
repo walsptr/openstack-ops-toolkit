@@ -1,0 +1,6 @@
+[
+ {"priority":0,"src":"all","table":"local"},
+ {"priority":4242,"src":"10.99.42.0","srclen":24,"table":"4242"},
+ {"priority":32766,"src":"all","table":"main"},
+ {"priority":32767,"src":"all","table":"default"}
+]
