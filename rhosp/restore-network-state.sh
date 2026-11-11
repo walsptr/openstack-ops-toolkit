@@ -207,6 +207,16 @@ valid_line() {
     done
     return 0
 }
+# ipt_restore ITEM FILE [OPSI...] — input lewat PIPE, bukan redirect file:
+# di unit systemd (SELinux initrc_t) iptables-restore tidak bisa membaca stdin
+# yang di-redirect dari file di /var/lib/osops-restore (ditolak diam-diam oleh
+# dontaudit) dan keluar 0 tanpa menerapkan apa pun. Diverifikasi di RHEL 9.
+ipt_restore() {
+    it="$1" f="$2"
+    shift 2
+    [ -r "$f" ] && [ -s "$f" ] || { echo "Error: cannot read $f" > "$D/err"; return 1; }
+    cat "$f" | timeout 60 "$(tool "$it")-restore" "$@" -w 5 > /dev/null 2> "$D/err"
+}
 nft_norm() { grep -v -e "^#" -e "^flush ruleset\$" | sed -E "s/ packets [0-9]+ bytes [0-9]+//; s/[[:space:]]+\$//" | grep -v "^\$"; }
 ipt_norm() { grep -v "^#" | sed -E "s/^(:[^ ]+ [^ ]+) \[[0-9]+:[0-9]+\]\$/\1 [0:0]/; s/^\[[0-9]+:[0-9]+\] //"; }
 ipt_tables() { sed -n "s/^\*//p" "$1"; }
@@ -247,7 +257,7 @@ ph_verify() {
             iptables-v*)
                 for f in "items/$it.rules" "pre/$it.rules" "pre/$it.empty"; do
                     [ -f "$D/$f" ] || continue
-                    if ! timeout 60 "$(tool "$it")-restore" --test -w 5 < "$D/$f" > /dev/null 2> "$D/err"; then
+                    if ! ipt_restore "$it" "$D/$f" --test; then
                         ok=0 msg="$f: $(san)"
                     fi
                 done ;;
@@ -308,8 +318,7 @@ ph_apply() {
         st=APPLIED det=""
         case "$it" in
             iptables-v*)
-                timeout 60 "$(tool "$it")-restore" -w 5 < "$D/items/$it.rules" > /dev/null 2> "$D/err" \
-                    || { st=FAILED; det="$(san)"; } ;;
+                ipt_restore "$it" "$D/items/$it.rules" || { st=FAILED; det="$(san)"; } ;;
             nftables)
                 timeout 60 nft -f "$D/items/nftables.batch" < /dev/null > /dev/null 2> "$D/err" \
                     || { st=FAILED; det="$(san)"; } ;;
@@ -382,8 +391,14 @@ ph_rollback() {
             st=OK det=""
             case "$it" in
                 iptables-v*)
-                    timeout 60 "$(tool "$it")-restore" -w 5 < "$D/pre/$it.rules" > /dev/null 2> "$D/err" \
-                        || { st=FAILED; det="$(san)"; }
+                    ipt_restore "$it" "$D/pre/$it.rules" || { st=FAILED; det="$(san)"; }
+                    # Cek sendiri: jumlah aturan per tabel = snapshot pra-restore
+                    if [ "$st" = OK ]; then
+                        timeout 60 "$(tool "$it")-save" 2>/dev/null | awk "$AWK_IPT" > "$D/rb.act"
+                        awk "$AWK_IPT" "$D/pre/$it.rules" > "$D/rb.exp"
+                        mism="$(awk -F "\t" "FNR == NR { a[\$1] = \$2; next } (\$1 in a) && a[\$1] != \$2 { printf \"%s: %s now, %s expected; \", \$1, a[\$1], \$2 }" "$D/rb.act" "$D/rb.exp")"
+                        [ -z "$mism" ] || { st=FAILED; det="counts differ after restore: $mism"; }
+                    fi
                     if [ "$st" = OK ] && [ -s "$D/pre/$it.drop" ]; then
                         if [ "$BK" = nf_tables ]; then
                             for tb in $(cat "$D/pre/$it.drop"); do
@@ -391,8 +406,7 @@ ph_rollback() {
                                     || { st=FAILED; det="delete table $tb: $(san)"; }
                             done
                         elif [ -s "$D/pre/$it.empty" ]; then
-                            timeout 60 "$(tool "$it")-restore" -w 5 < "$D/pre/$it.empty" > /dev/null 2> "$D/err" \
-                                || { st=FAILED; det="empty tables: $(san)"; }
+                            ipt_restore "$it" "$D/pre/$it.empty" || { st=FAILED; det="empty tables: $(san)"; }
                             det="${det:-tables emptied: $(tr "\n" " " < "$D/pre/$it.drop")}"
                         fi
                     fi ;;

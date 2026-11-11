@@ -536,14 +536,32 @@ test_rollback_mismatch() {
     host_env "$C0" RB_NOOP=1 DRIFT_AFTER_APPLY=1
     start_apply overcloud-controller-0 --backup-dir "$BK_DIR" --host overcloud-controller-0 --items iptables-v4 --apply --rollback-timeout 120 || return 0
     expect_eq "rollback tidak memulihkan: exit 2 (kritis)" "$(tmux_exit 240)" "2"
-    expect_match "verifikasi menemukan selisih" "$(screen_text)" 'verifikasi iptables-v4: MISMATCH +table filter: [0-9]+ rules now, [0-9]+ expected'
-    expect_match "hasil rollback per item ditampilkan" "$(screen_text)" 'rollback iptables-v4: OK'
-    expect_match "KRITIS di ringkasan" "$(screen_text)" 'KRITIS: rollback verification mismatch'
+    expect_match "rollback mendeteksi sendiri (jumlah per tabel)" "$(screen_text)" 'rollback iptables-v4: FAILED counts differ after restore: filter: [0-9]+ now, [0-9]+ expected'
+    expect_match "KRITIS ditampilkan" "$(screen_text)" 'KRITIS: rollback di overcloud-controller-0 GAGAL'
     expect_true "direktori node TIDAK dihapus (bukti)" test -e "$(node_dir "$C0")/rollback.result"
     expect_true "state file tetap ada" test -e "$(state_file overcloud-controller-0)"
-    expect_match "log: ROLLBACK_ITEM" "$(log_text)" 'ROLLBACK_ITEM item=iptables-v4 status=OK'
-    expect_match "log: ROLLBACK FAILED mismatch" "$(log_text)" 'ROLLBACK result=FAILED verified=mismatch'
+    expect_match "log: ROLLBACK_ITEM FAILED" "$(log_text)" 'ROLLBACK_ITEM item=iptables-v4 status=FAILED'
+    expect_match "log: ROLLBACK FAILED" "$(log_text)" 'ROLLBACK result=FAILED'
     check_log_clean
+}
+
+# RHEL 9 + SELinux: di unit systemd iptables-restore tidak membaca stdin dari
+# file (ditemukan di dev). Rollback lewat unit harus tetap memulihkan.
+test_selinux_rollback() {
+    local L
+    begin "selinux_rollback"
+    make_backup overcloud-controller-0 || return 0
+    drift "$C0"
+    L="$(hd "$C0")/live"
+    cp "$L/ipt4" "$WORK/ipt4.before"
+    host_env "$C0" SELINUX_SIM=1 OFFLINE_AFTER_APPLY=1
+    start_apply overcloud-controller-0 --backup-dir "$BK_DIR" --host overcloud-controller-0 --items iptables-v4 --apply --rollback-timeout 120 || return 0
+    expect_eq "exit 1 (rolled back)" "$(tmux_exit 240)" "1"
+    expect_match "rollback lewat unit, terverifikasi" "$(screen_text)" 'verifikasi iptables-v4: OK'
+    expect_match "ringkasan ROLLED_BACK" "$(screen_text)" 'iptables-v4 +ROLLED_BACK'
+    expect_eq "iptables kembali persis ke kondisi sebelum apply" "$(cat "$L/ipt4")" "$(cat "$WORK/ipt4.before")"
+    expect_eq "tidak ada restore yang terblokir (input lewat pipe)" "$(grep -c '^SELINUX_BLOCK' "$WORK/state/calls.log" || true)" "0"
+    expect_true "rollback memang lewat unit" test -e "$(unit_dir "$C0")/service.done"
 }
 
 test_count_mismatch() {
@@ -688,7 +706,7 @@ test_real_apply() {
 # ============================================================
 
 ALL_TESTS=(dryrun validation items apply_reject apply_confirm upload_guard count_mismatch
-    rollback_integrity rollback_mismatch legacy_rollback ssh_block confirm_timeout remain_short interrupt real_apply)
+    rollback_integrity rollback_mismatch selinux_rollback legacy_rollback ssh_block confirm_timeout remain_short interrupt real_apply)
 for t in "${ALL_TESTS[@]}"; do
     want "$t" && "test_$t"
 done

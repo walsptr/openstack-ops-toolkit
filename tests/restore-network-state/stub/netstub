@@ -11,7 +11,8 @@
 # Env host: FQDN, PCS_NAME, IPT_BACKEND (nf_tables|legacy), VERIFY_FAIL
 # (ipt|nft), SUDO_FAIL, PCS_SLOW (detik), OFFLINE_AFTER_APPLY, DRIFT_AFTER_APPLY,
 # CORRUPT_PRE (ubah file pre/ di direktori restore setelah apply), RB_NOOP
-# (restore iptables ke-2 = rollback tidak berefek; menguji verifikasi rollback)
+# (restore iptables ke-2 = rollback tidak berefek; menguji verifikasi rollback),
+# SELINUX_SIM (di unit systemd, iptables-restore tidak membaca stdin dari file)
 S="${STUB_STATE:?}"
 HD="${STUB_HD:?}"
 L="$HD/live"
@@ -119,6 +120,12 @@ case "$me" in
         [[ "${1:-}" == --version || "${1:-}" == -V ]] && { echo "$me v1.8.10 ($BK)"; exit 0; }
         need_root
         f="$L/ipt4"; [[ "$me" == ip6tables-restore ]] && f="$L/ipt6"
+        # SELINUX_SIM=1: di dalam unit systemd stdin yang di-redirect dari FILE
+        # tidak terbaca (seperti iptables_t/initrc_t di RHEL 9): input kosong, rc 0
+        if [[ "${SELINUX_SIM:-0}" == 1 && "${STUB_IN_UNIT:-0}" == 1 && -f /dev/stdin ]]; then
+            printf '%s\t%s\t%s\n' SELINUX_BLOCK "${STUB_HOST:-?}" "$me $*" >> "$S/calls.log"
+            exit 0
+        fi
         if [[ " $* " == *" --test "* ]]; then
             ipt_check
             exit $?
@@ -279,7 +286,7 @@ case "$me" in
                 while [[ -f "$d/service.activating" ]]; do sleep 0.2; done
                 [[ -f "$d/service.done" ]] && exit 0
                 touch "$d/service.activating"
-                eval "STUB_ROOT=1 $(cat "$d/cmd")" < /dev/null > "$d/service.log" 2>&1
+                eval "STUB_ROOT=1 STUB_IN_UNIT=1 $(cat "$d/cmd")" < /dev/null > "$d/service.log" 2>&1
                 touch "$d/service.done"
                 rm -f "$d/service.activating" "$d/timer.active"
                 exit 0 ;;
