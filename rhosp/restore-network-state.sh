@@ -210,7 +210,8 @@ valid_line() {
 nft_norm() { grep -v -e "^#" -e "^flush ruleset\$" | sed -E "s/ packets [0-9]+ bytes [0-9]+//; s/[[:space:]]+\$//" | grep -v "^\$"; }
 ipt_norm() { grep -v "^#" | sed -E "s/^(:[^ ]+ [^ ]+) \[[0-9]+:[0-9]+\]\$/\1 [0:0]/; s/^\[[0-9]+:[0-9]+\] //"; }
 ipt_tables() { sed -n "s/^\*//p" "$1"; }
-ipt_section() { awk -v t="$2" "/^\\*/ { on = (substr(\$0, 2) == t) } on" | ipt_norm; }
+# ipt_section TABEL < FILE — baris tabel (ternormalisasi) dari stdin
+ipt_section() { awk -v t="$1" "/^\\*/ { on = (substr(\$0, 2) == t) } on" | ipt_norm; }
 route_present() {
     # route_present ITEM SPEC: route dengan dst (token 1) + table ada sekarang
     set -- "$1" $2
@@ -1485,6 +1486,16 @@ post_checks() {
     return 0
 }
 
+# Tampilkan dan catat rollback.result per item (status + alasan, tanpa isi aturan)
+report_rb_items() {
+    local it st det
+    while IFS=$'\t' read -r it st det; do
+        [[ -n "$it" && "$it" != result=* && "$it" != reason=* ]] || continue
+        printf '     rollback %s: %s %s\n' "$it" "$st" "$det"
+        log_event ROLLBACK_ITEM "item=$it" "status=$st" "detail=${det:--}"
+    done < <(sed -n 's/^rb://p' <<< "${STATUS_OUT:-}")
+}
+
 # Tunggu rollback (timer atau rollback-now) lalu verifikasi lewat koneksi baru
 wait_rollback() {
     local deadline now
@@ -1500,9 +1511,13 @@ wait_rollback() {
         sleep 5
     done
     case "$NS_STATE" in
+        ROLLED_BACK|ROLLBACK_FAILED) report_rb_items ;;
+    esac
+    case "$NS_STATE" in
         ROLLED_BACK)
             FRESH=1 agent verify-rollback || true
             VR_OUT="$AGENT_OUT"
+            awk -F'\t' '$1 == "vr" { printf "     verifikasi %s: %s %s\n", $2, $3, $4 }' <<< "$VR_OUT"
             if grep -qP '^vr\t[^\t]+\tOK' <<< "$VR_OUT" && ! grep -qP '^vr\t[^\t]+\tMISMATCH' <<< "$VR_OUT"; then
                 echo "  ✅ Rollback selesai dan terverifikasi lewat koneksi baru"
                 log_event ROLLBACK result=OK verified=yes

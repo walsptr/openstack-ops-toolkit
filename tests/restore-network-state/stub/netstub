@@ -10,7 +10,8 @@
 #
 # Env host: FQDN, PCS_NAME, IPT_BACKEND (nf_tables|legacy), VERIFY_FAIL
 # (ipt|nft), SUDO_FAIL, PCS_SLOW (detik), OFFLINE_AFTER_APPLY, DRIFT_AFTER_APPLY,
-# CORRUPT_PRE (ubah file pre/ di direktori restore setelah apply)
+# CORRUPT_PRE (ubah file pre/ di direktori restore setelah apply), RB_NOOP
+# (restore iptables ke-2 = rollback tidak berefek; menguji verifikasi rollback)
 S="${STUB_STATE:?}"
 HD="${STUB_HD:?}"
 L="$HD/live"
@@ -34,7 +35,9 @@ after_apply() {
             sed -i -E "0,/^ Offline:/ s/^ Offline:/ Offline: $PCS_NAME/" "$S/cluster/status-nodes"
         fi
     fi
-    if [[ "${DRIFT_AFTER_APPLY:-0}" == 1 ]]; then
+    # Agen mengubah aturan SEKALI (setelah apply pertama), bukan setiap restore
+    if [[ "${DRIFT_AFTER_APPLY:-0}" == 1 && ! -e "$HD/drift.done" ]]; then
+        touch "$HD/drift.done"
         sed -i '/^\*filter$/,/^COMMIT$/ s/^COMMIT$/-A INPUT -s 10.77.0.1\/32 -j DROP\nCOMMIT/' "$L/ipt4"
     fi
     if [[ "${CORRUPT_PRE:-0}" == 1 ]]; then
@@ -122,6 +125,9 @@ case "$me" in
         fi
         in="$(cat)"
         ipt_check <<< "$in" || exit 1
+        # RB_NOOP=1: restore ke-2 dan seterusnya (rollback) tidak mengubah apa pun
+        n=$(( $(cat "$HD/restore.count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$HD/restore.count"
+        if [[ "${RB_NOOP:-0}" == 1 ]] && (( n >= 2 )); then exit 0; fi
         ipt_replace "$f" <<< "$in"
         after_apply
         ;;

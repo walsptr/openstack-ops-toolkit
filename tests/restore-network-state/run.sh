@@ -449,6 +449,7 @@ test_confirm_timeout() {
     expect_match "tidak ada konfirmasi: rollback" "$(screen_text)" 'Tidak ada konfirmasi: rollback dibiarkan berjalan'
     expect_eq "iptables kembali ke kondisi sebelum apply" "$(cat "$L/ipt4")" "$(cat "$WORK/ipt4.before")"
     expect_match "ringkasan ROLLED_BACK" "$(screen_text)" 'iptables-v4 +ROLLED_BACK +not confirmed in time'
+    expect_match "verifikasi rollback benar-benar membandingkan (OK)" "$(screen_text)" 'verifikasi iptables-v4: OK'
 }
 
 test_remain_short() {
@@ -523,6 +524,26 @@ test_rollback_integrity() {
     expect_true "state file tetap ada" test -e "$(state_file overcloud-controller-0)"
     run_plain "OSOPS_RUN_ID=st-0001" --status --host overcloud-controller-0
     expect_match "--status: KRITIS" "$PLAIN_OUT" 'ROLLBACK_FAILED[^❗]*❗ KRITIS'
+}
+
+# Rollback yang "berhasil" tetapi tidak memulihkan apa pun harus terdeteksi
+test_rollback_mismatch() {
+    local L
+    begin "rollback_mismatch"
+    make_backup overcloud-controller-0 || return 0
+    drift "$C0"
+    L="$(hd "$C0")/live"
+    host_env "$C0" RB_NOOP=1 DRIFT_AFTER_APPLY=1
+    start_apply overcloud-controller-0 --backup-dir "$BK_DIR" --host overcloud-controller-0 --items iptables-v4 --apply --rollback-timeout 120 || return 0
+    expect_eq "rollback tidak memulihkan: exit 2 (kritis)" "$(tmux_exit 240)" "2"
+    expect_match "verifikasi menemukan selisih" "$(screen_text)" 'verifikasi iptables-v4: MISMATCH +table filter: [0-9]+ rules now, [0-9]+ expected'
+    expect_match "hasil rollback per item ditampilkan" "$(screen_text)" 'rollback iptables-v4: OK'
+    expect_match "KRITIS di ringkasan" "$(screen_text)" 'KRITIS: rollback verification mismatch'
+    expect_true "direktori node TIDAK dihapus (bukti)" test -e "$(node_dir "$C0")/rollback.result"
+    expect_true "state file tetap ada" test -e "$(state_file overcloud-controller-0)"
+    expect_match "log: ROLLBACK_ITEM" "$(log_text)" 'ROLLBACK_ITEM item=iptables-v4 status=OK'
+    expect_match "log: ROLLBACK FAILED mismatch" "$(log_text)" 'ROLLBACK result=FAILED verified=mismatch'
+    check_log_clean
 }
 
 test_count_mismatch() {
@@ -667,7 +688,7 @@ test_real_apply() {
 # ============================================================
 
 ALL_TESTS=(dryrun validation items apply_reject apply_confirm upload_guard count_mismatch
-    rollback_integrity legacy_rollback ssh_block confirm_timeout remain_short interrupt real_apply)
+    rollback_integrity rollback_mismatch legacy_rollback ssh_block confirm_timeout remain_short interrupt real_apply)
 for t in "${ALL_TESTS[@]}"; do
     want "$t" && "test_$t"
 done
