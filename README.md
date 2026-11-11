@@ -1020,14 +1020,14 @@ rhosp/backup-network-state.sh
 # Directly / from cron (no terminal: --nodes/--node/--role or --local is required)
 rhosp/backup-network-state.sh --nodes overcloud-controller-0,overcloud-computeiha-0
 rhosp/backup-network-state.sh --role Controller --include-netns
-rhosp/backup-network-state.sh --all --local --parallel 8      # asks to type the node count
+rhosp/backup-network-state.sh --all --parallel 8              # all overcloud nodes + undercloud; asks to type the node count
 rhosp/backup-network-state.sh --role ComputeInstanceHA --counters --output-dir /srv/backup/netstate
 ```
 
 | Option | Description |
 |---|---|
 | `--nodes H1,H2`, `--node HOST`, `--role ROLE` | Target nodes (repeatable, case-insensitive) |
-| `--all` | All overcloud nodes; needs a terminal and the typed node count |
+| `--all` | All overcloud nodes **and the undercloud** (like `--local`). The list is shown first (undercloud on a separate line), then the node count must be typed; needs a terminal |
 | `--local` | Also back up the host running the script (undercloud) |
 | `--include-netns` | Also back up every namespace from `ip netns list` (route, rule, iptables, nftables, e.g. `ovnmeta-*`, `qrouter-*`). More than 50 namespaces on a node asks for confirmation (no terminal: namespaces of that node are skipped). Names that are not `[A-Za-z0-9][A-Za-z0-9._:@-]*` are skipped, never used as a path |
 | `--counters` | Keep counters (`iptables-save -c`, `nft list ruleset`). Default: no rule counters, chain policy counters set to `[0:0]`, `nft -s` — backups of unchanged rules are identical and diffable |

@@ -554,15 +554,21 @@ test_selection() {
     expect_match "--all + --role ditolak" "$PLAIN_OUT" 'tidak bisa digabung'
 
     run_tmux "" --all
-    answer 'Ketik jumlah node \(6\)' 1 5 || return 0
+    wait_for 'Ketik jumlah node \(7\)' 1 || return 0
+    expect_match "--all: undercloud baris terpisah sebelum konfirmasi" "$(screen_text)" \
+        $'192\\.168\\.24\\.[0-9]+\n +----\n +undercloud +Undercloud +lokal \\(host ini\\)\n.*Ketik jumlah node \\(7\\)'
+    expect_eq "--all: 6 baris node overcloud di daftar" "$(screen_text | grep -cE '^ +overcloud-[a-z]+-[0-9] +(Controller|ComputeInstanceHA) +192\.168\.24\.')" "6"
+    expect_match "--all: ringkasan jumlah" "$(screen_text)" '7 node akan dibackup \(6 node overcloud \+ undercloud\)'
+    keys 6 Enter
     expect_eq "--all: jumlah salah => batal, exit 0" "$(tmux_exit)" "0"
     expect_eq "--all batal: tidak ada ssh" "$(grep -c '^ssh' "$WORK/state/calls.log" || true)" "0"
 
     run_tmux "" --all --parallel 3
-    answer 'Ketik jumlah node \(6\)' 1 6 || return 0
-    expect_eq "--all: 6 node, exit 0" "$(tmux_exit 60)" "0"
-    expect_eq "--all: 6 direktori host" "$(find "$(run_dir)" -mindepth 1 -maxdepth 1 -type d | wc -l)" "6"
-    expect_match "--all: daftar node sebelum mulai" "$(screen_text)" 'Node       : 6'
+    answer 'Ketik jumlah node \(7\)' 1 7 || return 0
+    expect_eq "--all: 7 node, exit 0" "$(tmux_exit 60)" "0"
+    expect_eq "--all: 7 direktori host" "$(find "$(run_dir)" -mindepth 1 -maxdepth 1 -type d | wc -l)" "7"
+    expect_true "--all: undercloud ikut dibackup" test -s "$(run_dir)/undercloud/iptables-v4.rules"
+    expect_match "--all: daftar node sebelum mulai" "$(screen_text)" 'Node       : 7'
 
     reset_state
     run_plain "" --role ComputeInstanceHA --nodes overcloud-controller-2

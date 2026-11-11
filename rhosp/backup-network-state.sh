@@ -34,7 +34,8 @@ Options:
   --nodes H1,H2       Node target, dipisah koma
   --node HOST         Node target (bisa diulang)
   --role ROLE         Semua node dalam role (bisa diulang)
-  --all               Semua node overcloud (butuh terminal: ketik jumlah node)
+  --all               Semua node overcloud + undercloud (seperti --local);
+                      butuh terminal: ketik jumlah node
   --local             Ikut backup host yang menjalankan script (undercloud)
   --include-netns     Ikut backup setiap network namespace (ip netns list):
                       route, rule, iptables, nftables. Lebih dari 50 namespace
@@ -1026,13 +1027,22 @@ rhosp_load_nodes
 
 # Pemilihan node
 if (( ALL_NODES )); then
+    # --all = semua node overcloud + undercloud (seperti --local)
+    LOCAL_RUN=1
     for _i in "${!N_NAME[@]}"; do
         (( N_LOCAL[_i] )) || select_idx "$_i"
     done
-    (( LOCAL_RUN )) && select_idx "$UC_IDX"
+    _n_oc=${#SEL[@]}
+    select_idx "$UC_IDX"
     _answer=""
     echo
-    warn "--all: ${#SEL[@]} node akan dibackup ($(rhosp_selected_names | cut -c1-300))."
+    warn "--all: ${#SEL[@]} node akan dibackup ($_n_oc node overcloud + undercloud):"
+    for _i in "${SEL[@]}"; do
+        (( N_LOCAL[_i] )) && continue
+        printf '     %-28s %-20s %s\n' "${N_NAME[$_i]}" "${N_ROLE[$_i]}" "${N_IP[$_i]}"
+    done
+    echo "     ----"
+    printf '     %-28s %-20s %s\n' "${N_NAME[$UC_IDX]}" "Undercloud" "lokal (host ini)"
     ask _answer "Ketik jumlah node (${#SEL[@]}) untuk melanjutkan: "
     if [[ "$(trim "$_answer")" != "${#SEL[@]}" ]]; then
         log_event DECISION all=cancel "count=${#SEL[@]}"
