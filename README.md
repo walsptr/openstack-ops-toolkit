@@ -1015,7 +1015,8 @@ are reached with the inventory user over SSH (same inventory search, picker and 
 the other RHOSP scripts). Marked `@platform: rhosp`.
 
 ```bash
-# From the TUI: no arguments — nodes are picked (entries "[semua <Role>]", "Undercloud (lokal)")
+# From the TUI: no arguments — nodes are picked (entries "[semua node]" = --all, "[semua <Role>]",
+# "Undercloud (lokal)")
 rhosp/backup-network-state.sh
 
 # Directly / from cron (no terminal: --nodes/--node/--role or --local is required)
@@ -1028,7 +1029,7 @@ rhosp/backup-network-state.sh --role ComputeInstanceHA --counters --output-dir /
 | Option | Description |
 |---|---|
 | `--nodes H1,H2`, `--node HOST`, `--role ROLE` | Target nodes (repeatable, case-insensitive) |
-| `--all` | All overcloud nodes **and the undercloud** (like `--local`). The list is shown first (undercloud on a separate line), then the node count must be typed; needs a terminal |
+| `--all` | All overcloud nodes **and the undercloud** (like `--local`). The list is shown first (undercloud on a separate line), then the node count must be typed; needs a terminal. The picker entry `[semua node]` (top of the list) does the same |
 | `--local` | Also back up the host running the script (undercloud) |
 | `--include-netns` | Also back up every namespace from `ip netns list` (route, rule, iptables, nftables, e.g. `ovnmeta-*`, `qrouter-*`). More than 50 namespaces on a node asks for confirmation (no terminal: namespaces of that node are skipped). Names that are not `[A-Za-z0-9][A-Za-z0-9._:@-]*` are skipped, never used as a path |
 | `--counters` | Keep counters (`iptables-save -c`, `nft list ruleset`). Default: no rule counters, chain policy counters set to `[0:0]`, `nft -s` — backups of unchanged rules are identical and diffable |

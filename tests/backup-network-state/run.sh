@@ -580,6 +580,23 @@ test_selection() {
     run_tmux "STUB_FZF_SELECT='overcloud-controller-1'"
     expect_eq "picker: exit 0" "$(tmux_exit)" "0"
     expect_eq "picker: node terpilih dibackup" "$(find "$(run_dir)" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" "overcloud-controller-1"
+    expect_match "picker: entry [semua node] paling atas" "$(head -n 1 "$WORK/state/fzf.in")" $'^all\t\\[semua node\\] \\(6 node overcloud \\+ undercloud\\)$'
+
+    # Entry "[semua node]" = --all: daftar + konfirmasi ketik jumlah
+    reset_state
+    run_tmux "STUB_FZF_SELECT='semua node'"
+    answer 'Ketik jumlah node \(7\)' 1 3 || return 0
+    expect_eq "picker [semua node]: jumlah salah => batal" "$(tmux_exit)" "0"
+    expect_eq "picker [semua node] batal: tidak ada ssh" "$(grep -c '^ssh' "$WORK/state/calls.log" || true)" "0"
+    expect_match "picker [semua node]: undercloud baris terpisah" "$(screen_text)" $'\\[semua node\\]: 7 node akan dibackup \\(6 node overcloud \\+ undercloud\\)'
+
+    reset_state
+    run_tmux "STUB_FZF_SELECT='semua node'"
+    answer 'Ketik jumlah node \(7\)' 1 7 || return 0
+    expect_eq "picker [semua node]: exit 0" "$(tmux_exit 60)" "0"
+    expect_eq "picker [semua node]: 7 direktori host" "$(find "$(run_dir)" -mindepth 1 -maxdepth 1 -type d | wc -l)" "7"
+    expect_true "picker [semua node]: undercloud ikut" test -s "$(run_dir)/undercloud/iptables-v4.rules"
+    expect_match "log: DECISION via picker" "$(log_text)" 'DECISION all=confirm via="\[semua node\]" count=7'
 }
 
 test_local() {

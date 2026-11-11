@@ -36,6 +36,9 @@
 #   rhosp_select_nodes    --node/--role (NODE_ARGS/ROLE_ARGS) atau picker
 #                         (fzf multi-select dengan entry "[semua <Role>]", atau
 #                         menu bernomor). Hasil di SEL. Tidak ada => exit 0.
+#                         RHOSP_PICK_ALL=1: entry "[semua node]" di atas daftar
+#                         (overcloud + undercloud jika RHOSP_WITH_UNDERCLOUD=1);
+#                         jika dipilih, RHOSP_PICKED_ALL=1 (script konfirmasi sendiri).
 #   rhosp_pick_nodes      hanya picker; return 1 jika batal/kosong
 #   rhosp_reset_selection kosongkan SEL/N_SEL
 #
@@ -77,6 +80,8 @@ _OSOPS_RHOSP_LOADED=1
 RHOSP_RELEASE_FILE="${OSOPS_RHOSP_RELEASE_FILE:-/etc/rhosp-release}"
 STACK_HOME="${OSOPS_STACK_HOME:-/home/stack}"
 RHOSP_WITH_UNDERCLOUD="${RHOSP_WITH_UNDERCLOUD:-0}"
+RHOSP_PICK_ALL="${RHOSP_PICK_ALL:-0}"
+RHOSP_PICKED_ALL=0
 RHOSP_WORK_DIR="${RHOSP_WORK_DIR:-}"
 
 read -ra SSH_CMD <<< "${OSOPS_SSH:-ssh}"
@@ -457,9 +462,16 @@ role_count() {
     printf '%d' "$n"
 }
 
-# Terapkan pilihan dari picker: role:<Role> | uc | node:<idx>
+# Terapkan pilihan dari picker: all | role:<Role> | uc | node:<idx>
 apply_pick() {
+    local i
     case "$1" in
+        all)
+            RHOSP_PICKED_ALL=1
+            for i in "${!N_NAME[@]}"; do
+                (( N_LOCAL[i] )) || select_idx "$i"
+            done
+            if (( RHOSP_WITH_UNDERCLOUD )); then select_idx "$UC_IDX"; fi ;;
         role:*) select_role "${1#role:}" || true ;;
         uc)     select_idx "$UC_IDX" ;;
         node:*) select_idx "${1#node:}" ;;
@@ -467,8 +479,15 @@ apply_pick() {
 }
 
 picker_entries() {
-    local role i
+    local role i n_oc=0
     P_KEY=() P_LABEL=()
+    if (( RHOSP_PICK_ALL )); then
+        for i in "${!N_NAME[@]}"; do
+            (( N_LOCAL[i] )) || n_oc=$(( n_oc + 1 ))
+        done
+        P_KEY+=("all")
+        P_LABEL+=("[semua node] ($n_oc node overcloud$( (( RHOSP_WITH_UNDERCLOUD )) && echo ' + undercloud'))")
+    fi
     while IFS= read -r role; do
         P_KEY+=("role:$role")
         P_LABEL+=("[semua $role] ($(role_count "$role") node)")

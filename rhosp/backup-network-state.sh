@@ -53,7 +53,7 @@ Options:
   -h, --help          Tampilkan help
 
 Tanpa --nodes/--node/--role/--all/--local, node dipilih lewat picker
-(entry "[semua <Role>]", "Undercloud (lokal)").
+(entry "[semua node]" = --all, "[semua <Role>]", "Undercloud (lokal)").
 
 Exit code: 0 semua node SUCCESS/SKIPPED, 1 ada node FAILED.
 
@@ -91,6 +91,7 @@ if ! source "$OSOPS_HOME/lib/netstate.sh" 2>/dev/null; then
     exit 1
 fi
 RHOSP_WITH_UNDERCLOUD=1
+RHOSP_PICK_ALL=1
 
 # ============================================================
 # Konfigurasi
@@ -501,6 +502,39 @@ on_exit() {
 }
 
 # ============================================================
+# Semua node (--all atau entry "[semua node]" di picker)
+# ============================================================
+
+# confirm_all_nodes LABEL — pilih semua node overcloud + undercloud, tampilkan
+# daftar (undercloud di baris terpisah), konfirmasi dengan mengetik jumlah node
+confirm_all_nodes() {
+    local label="$1" i n_oc answer=""
+    LOCAL_RUN=1
+    rhosp_reset_selection
+    for i in "${!N_NAME[@]}"; do
+        (( N_LOCAL[i] )) || select_idx "$i"
+    done
+    n_oc=${#SEL[@]}
+    select_idx "$UC_IDX"
+    echo
+    warn "$label: ${#SEL[@]} node akan dibackup ($n_oc node overcloud + undercloud):"
+    for i in "${SEL[@]}"; do
+        (( N_LOCAL[i] )) && continue
+        printf '     %-28s %-20s %s\n' "${N_NAME[$i]}" "${N_ROLE[$i]}" "${N_IP[$i]}"
+    done
+    echo "     ----"
+    printf '     %-28s %-20s %s\n' "${N_NAME[$UC_IDX]}" "Undercloud" "lokal (host ini)"
+    ask answer "Ketik jumlah node (${#SEL[@]}) untuk melanjutkan: "
+    if [[ "$(trim "$answer")" != "${#SEL[@]}" ]]; then
+        log_event DECISION all=cancel "via=$label" "count=${#SEL[@]}"
+        echo "❌ Dibatalkan."
+        exit 0
+    fi
+    log_event DECISION all=confirm "via=$label" "count=${#SEL[@]}"
+    log_event SELECT "selected=${#SEL[@]}" "nodes=$(rhosp_selected_names)"
+}
+
+# ============================================================
 # Argumen
 # ============================================================
 
@@ -596,30 +630,7 @@ rhosp_load_nodes
 
 # Pemilihan node
 if (( ALL_NODES )); then
-    # --all = semua node overcloud + undercloud (seperti --local)
-    LOCAL_RUN=1
-    for _i in "${!N_NAME[@]}"; do
-        (( N_LOCAL[_i] )) || select_idx "$_i"
-    done
-    _n_oc=${#SEL[@]}
-    select_idx "$UC_IDX"
-    _answer=""
-    echo
-    warn "--all: ${#SEL[@]} node akan dibackup ($_n_oc node overcloud + undercloud):"
-    for _i in "${SEL[@]}"; do
-        (( N_LOCAL[_i] )) && continue
-        printf '     %-28s %-20s %s\n' "${N_NAME[$_i]}" "${N_ROLE[$_i]}" "${N_IP[$_i]}"
-    done
-    echo "     ----"
-    printf '     %-28s %-20s %s\n' "${N_NAME[$UC_IDX]}" "Undercloud" "lokal (host ini)"
-    ask _answer "Ketik jumlah node (${#SEL[@]}) untuk melanjutkan: "
-    if [[ "$(trim "$_answer")" != "${#SEL[@]}" ]]; then
-        log_event DECISION all=cancel "count=${#SEL[@]}"
-        echo "❌ Dibatalkan."
-        exit 0
-    fi
-    log_event DECISION all=confirm "count=${#SEL[@]}"
-    log_event SELECT "selected=${#SEL[@]}" "nodes=$(rhosp_selected_names)"
+    confirm_all_nodes "--all"
 elif (( LOCAL_RUN )) && (( ${#NODE_ARGS[@]} == 0 && ${#ROLE_ARGS[@]} == 0 )); then
     select_idx "$UC_IDX"
     echo "✅ Node terpilih     : 1 (${N_NAME[$UC_IDX]}, lokal)"
@@ -627,6 +638,8 @@ elif (( LOCAL_RUN )) && (( ${#NODE_ARGS[@]} == 0 && ${#ROLE_ARGS[@]} == 0 )); th
 else
     INCLUDE_UC="$LOCAL_RUN"
     rhosp_select_nodes
+    # Entry "[semua node]" di picker = --all (konfirmasi yang sama)
+    if (( RHOSP_PICKED_ALL )); then confirm_all_nodes "[semua node]"; fi
 fi
 # Nama host dipakai sebagai nama direktori
 for _i in "${SEL[@]}"; do
