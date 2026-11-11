@@ -1,0 +1,1 @@
+[{"dst":"10.99.42.0/24","gateway":"172.17.0.199","dev":"vlan20","protocol":"static","metric":4242,"flags":[]}]

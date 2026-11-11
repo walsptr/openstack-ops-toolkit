@@ -1,0 +1,138 @@
+#!/bin/bash
+# Tool jaringan palsu (multi-call: ip, iptables, iptables-save, ip6tables-save,
+# nft, iptables-restore, ip6tables-restore, sudo, sha256sum). Output dari
+# fixtures; setiap panggilan dicatat di calls.log (allowlist dicek tes).
+# Perintah yang MENGUBAH state (restore tanpa --test, nft -f tanpa -c, flush,
+# route add/del) membuat file VIOLATION di direktori host.
+FIX="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../fixtures" && pwd)"
+S="${STUB_STATE:?}"
+HD="${STUB_HD:-$S/local}"
+me="${0##*/}"
+printf '%s\t%s\t%s\n' "$me" "${STUB_HOST:-local}${STUB_NS:+@$STUB_NS}" "$*" >> "$S/calls.log"
+
+violation() {
+    printf '%s %s\n' "$me" "$*" >> "$HD/VIOLATION"
+    exit 0
+}
+need_root() {
+    if [[ "${STUB_ROOT:-0}" != 1 ]]; then
+        echo "$me v1.8.10 (nf_tables): Could not fetch rule set generation id: Permission denied (you must be root)" >&2
+        exit 4
+    fi
+}
+ns_ok() {
+    grep -qE "^$1( |\$)" "$HD/netns.list" 2>/dev/null || return 1
+    ! grep -qxF "$1" "$HD/netns.vanish" 2>/dev/null
+}
+
+case "$me" in
+    sudo)
+        [[ "${1:-}" == -n ]] && shift
+        printf 'SUDO\t%s\t%s\n' "${STUB_HOST:-local}" "$*" >> "$S/calls.log"
+        if [[ "${SUDO_FAIL:-0}" == 1 ]]; then
+            echo "sudo: a password is required" >&2
+            exit 1
+        fi
+        STUB_ROOT=1 exec "$@"
+        ;;
+    sha256sum)
+        # CORRUPT_SUM: hash routes-v4.txt salah (meniru korupsi transfer)
+        /usr/bin/sha256sum "$@" | sed -E 's#^[0-9a-f]{64}(  \./routes-v4\.txt)$#0000000000000000000000000000000000000000000000000000000000000000\1#'
+        exit "${PIPESTATUS[0]}"
+        ;;
+    iptables)
+        [[ "$1" == --version ]] && { echo "iptables v1.8.10 (${IPT_BACKEND:-nf_tables})"; exit 0; }
+        violation "$@"
+        ;;
+    iptables-save|ip6tables-save)
+        need_root
+        [[ -n "${SLOW_SAVE:-}" ]] && sleep "$SLOW_SAVE"
+        f="$FIX/iptables-v4.rules"
+        [[ "$me" == ip6tables-save ]] && f="$FIX/iptables-v6.rules"
+        if [[ "${1:-}" == -c ]]; then
+            sed "s/(nf_tables)/(${IPT_BACKEND:-nf_tables})/" "$f"
+        else
+            sed -E "s/(nf_tables)/(${IPT_BACKEND:-nf_tables})/; s/^\[[0-9]+:[0-9]+\] //" "$f"
+        fi
+        ;;
+    iptables-restore|ip6tables-restore)
+        need_root
+        [[ " $* " == *" --test "* ]] || violation "$@"
+        cat > /dev/null
+        if [[ "${VERIFY_FAIL:-}" == ipt && "$me" == iptables-restore ]]; then
+            echo "iptables-restore: line 6 failed"
+            exit 1
+        fi >&2
+        exit 0
+        ;;
+    nft)
+        [[ "$1" == --version ]] && { echo "nftables v1.0.9 (Old Doc Yak #3)"; exit 0; }
+        need_root
+        if [[ "$1" == -c && "$2" == -f ]]; then
+            if [[ "${VERIFY_FAIL:-}" == nft ]]; then
+                {
+                    echo "$3:4:3-60: Error: Could not process rule: No such file or directory"
+                    echo '		ip saddr 10.99.42.7 counter drop comment "OSOPS-RULE-MARKER-nfterr"'
+                    echo '		^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^'
+                } >&2
+                exit 1
+            fi
+            if grep -q 'xt match' "$3"; then
+                echo "$3:5:3-19: Error: unsupported xtables compat expression, use iptables-nft with this ruleset" >&2
+                exit 1
+            fi
+            exit 0
+        fi
+        if [[ "$*" == "list ruleset" || "$*" == "-s list ruleset" ]]; then
+            f="$FIX/nftables.ruleset"
+            [[ "${NFT_XT:-0}" == 1 ]] && f="$FIX/nftables-xt.ruleset"
+            if [[ "$1" == -s ]]; then sed -E 's/ packets [0-9]+ bytes [0-9]+//' "$f"; else cat "$f"; fi
+            exit 0
+        fi
+        violation "$@"
+        ;;
+    ip)
+        j=0 fam=4 ns=""
+        while (( $# > 0 )); do
+            case "$1" in
+                -j) j=1; shift ;;
+                -4) fam=4; shift ;;
+                -6) fam=6; shift ;;
+                -n) ns="$2"; shift 2 ;;
+                -V) echo "ip utility, iproute2-6.2.0, libbpf 1.2.0"; exit 0 ;;
+                *) break ;;
+            esac
+        done
+        if (( j )) && [[ "${NO_IPJ:-0}" == 1 ]]; then
+            echo 'Option "-j" is unknown, try "ip -help".' >&2
+            exit 255
+        fi
+        if [[ -n "$ns" ]]; then
+            [[ "${STUB_ROOT:-0}" == 1 ]] || { echo "mount --make-rslave /: Permission denied" >&2; exit 1; }
+            ns_ok "$ns" || { echo "Cannot open network namespace \"$ns\": No such file or directory" >&2; exit 1; }
+            export STUB_NS="$ns"
+        fi
+        case "$1 ${2:-}" in
+            "link show") exit 0 ;;
+            "netns list") cat "$HD/netns.list" 2>/dev/null; exit 0 ;;
+            "netns exec")
+                [[ "${STUB_ROOT:-0}" == 1 ]] || { echo "mount --make-rslave /: Permission denied" >&2; exit 1; }
+                ns="$3"
+                ns_ok "$ns" || { echo "Cannot open network namespace \"$ns\": No such file or directory" >&2; exit 1; }
+                shift 3
+                STUB_NS="$ns" exec "$@"
+                ;;
+            "route show"|"rule show")
+                [[ "$*" == "route show table all" || "$*" == "rule show" ]] || violation "$@"
+                if [[ "$fam" == 6 && "${IPV6_OFF:-0}" == 1 ]]; then
+                    echo "RTNETLINK answers: Address family not supported by protocol" >&2
+                    exit 2
+                fi
+                k=routes; [[ "$1" == rule ]] && k=rules
+                if (( j )); then cat "$FIX/$k-v$fam.json"; else cat "$FIX/$k-v$fam.txt"; fi
+                exit 0
+                ;;
+            *) violation "$@" ;;
+        esac
+        ;;
+esac

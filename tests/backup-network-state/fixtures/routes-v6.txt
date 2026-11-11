@@ -1,0 +1,2 @@
+fd00:99:42::/64 via fd00:17::199 dev vlan20 proto static metric 4242 pref medium
+fe80::/64 dev br-ctlplane proto kernel metric 256 pref medium

@@ -1,0 +1,108 @@
+#!/bin/bash
+# Stub ssh untuk tests/backup-network-state. Meniru sshd:
+#  - Perintah "remote" dijalankan dengan bash di direktori palsu per host
+#    ($STUB_STATE/hosts/<ip>/), PATH = stub tool (ip, iptables*, nft, sudo)
+#    + symlink ke /usr/bin tanpa tool jaringan asli.
+#  - /tmp node dipetakan ke hosts/<ip>/tmp: string "/tmp/osops-netstate-" di
+#    stdin (skrip remote) dan "find /tmp " di perintah (pembersihan).
+#  - Proses remote DILEPAS (setsid, bukan anak stub); stdout-nya FIFO yang
+#    dibaca stub. Jika stub dibunuh, tulisan remote berikutnya kena SIGPIPE,
+#    seperti channel SSH yang ditutup.
+#
+# Perilaku per host (hosts/<ip>/env): UNREACHABLE, HOSTKEY_CHANGED, AUTH_FAIL,
+# EVIL_TAR=1 (balas skrip koleksi dengan tar berisi symlink), selain itu
+# variabel yang dibaca stub/netstub (NO_NFT, NO_IP6TABLES_SAVE, IPT_BACKEND,
+# NFT_XT, VERIFY_FAIL, SLOW_SAVE, SUDO_FAIL, NO_IPJ, CORRUPT_SUM, ...).
+set -o nounset
+
+S="${STUB_STATE:?STUB_STATE belum diset}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shk="" hkalias=""
+
+while (( $# > 0 )); do
+    case "$1" in
+        -o)
+            [[ "$2" == StrictHostKeyChecking=* ]] && shk="${2#*=}"
+            [[ "$2" == HostKeyAlias=* ]] && hkalias="${2#*=}"
+            shift 2 ;;
+        -i|-p) shift 2 ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+    esac
+done
+
+dest="$1"
+shift
+cmd="$*"
+host="${dest#*@}"
+hkname="${hkalias:-$host}"
+hd="$S/hosts/$host"
+
+printf 'ssh\t%s\t%s\t%s\n' "$host" "$shk" "${cmd//$'\n'/ ; }" >> "$S/calls.log"
+
+if [[ ! -d "$hd" ]]; then
+    echo "ssh: Could not resolve hostname $host: Name or service not known" >&2
+    exit 255
+fi
+
+UNREACHABLE=0 HOSTKEY_CHANGED=0 AUTH_FAIL=0 EVIL_TAR=0
+set -a
+# shellcheck disable=SC1091
+[[ -f "$hd/env" ]] && source "$hd/env"
+set +a
+
+if [[ "$UNREACHABLE" == 1 ]]; then
+    echo "ssh: connect to host $host port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$HOSTKEY_CHANGED" == 1 ]]; then
+    echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2
+    echo "Host key verification failed." >&2
+    exit 255
+fi
+if ! ssh-keygen -F "$hkname" -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+    if [[ "$shk" == "accept-new" ]]; then
+        printf '%s %s\n' "$hkname" "${STUB_HOSTKEY_PUB:?}" >> "$HOME/.ssh/known_hosts"
+        echo "Warning: Permanently added '$hkname' (ED25519) to the list of known hosts." >&2
+    else
+        echo "Host key verification failed." >&2
+        exit 255
+    fi
+fi
+if [[ "$AUTH_FAIL" == 1 ]]; then
+    echo "tripleo-admin@$host: Permission denied (publickey)." >&2
+    exit 255
+fi
+
+mkdir -p "$hd/tmp"
+"$HERE/mkbin" "$hd/bin"
+sysbin="$S/sysbin"
+[[ -d "$sysbin" ]] || "$HERE/mkbin" --sys "$sysbin"
+
+tmp="$(mktemp -d "$S/ssh.XXXXXX")"
+# stdin (skrip remote) dengan /tmp dipetakan
+sed "s#/tmp/osops-netstate-#$hd/tmp/osops-netstate-#g" > "$tmp/in"
+c="${cmd//find \/tmp /find $hd/tmp }"
+
+if [[ "$EVIL_TAR" == 1 && "$cmd" == *'bash -c'* ]]; then
+    mkdir -p "$tmp/evil"
+    ln -s /etc/passwd "$tmp/evil/routes-v4.txt"
+    tar -C "$tmp/evil" -czf - .
+    rm -rf "$tmp"
+    exit 0
+fi
+
+mkfifo "$tmp/out"
+export STUB_HOST="$host" STUB_HD="$hd"
+# shellcheck disable=SC2016  # $1..$5 milik bash -c di dalam
+( PATH="$hd/bin:$sysbin" setsid bash -c 'bash -c "$1" < "$2" > "$3" 2> "$4"; echo $? > "$5.tmp"; mv "$5.tmp" "$5"' \
+    remote "$c" "$tmp/in" "$tmp/out" "$tmp/err" "$tmp/rc" & ) < /dev/null > /dev/null 2>&1
+cat "$tmp/out"
+while [[ ! -e "$tmp/rc" ]]; do
+    sleep 0.05
+done
+rc="$(cat "$tmp/rc")"
+sed "s#$hd/tmp#/tmp#g" "$tmp/err" >&2
+rm -rf "$tmp"
+exit "$rc"

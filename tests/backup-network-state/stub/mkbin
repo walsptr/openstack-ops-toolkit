@@ -1,0 +1,33 @@
+#!/bin/bash
+# mkbin DIR         — isi DIR dengan symlink tool jaringan palsu (netstub)
+#                     sesuai env host: NO_NFT, NO_IP6TABLES_SAVE, NO_IPTABLES,
+#                     CORRUPT_SUM (sha256sum palsu)
+# mkbin --sys DIR   — symlink ke semua /usr/bin dan /bin KECUALI tool jaringan
+#                     dan sudo asli (node palsu tidak boleh memakai tool host)
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$1" == --sys ]]; then
+    t="$(mktemp -d "$2.XXXXXX")"
+    for f in /usr/bin/* /bin/*; do
+        b="${f##*/}"
+        case "$b" in
+            ip|iptables*|ip6tables*|nft|sudo|xtables*|arptables*|ebtables*) continue ;;
+        esac
+        [[ -e "$t/$b" ]] || ln -s "$f" "$t/$b" 2>/dev/null || true
+    done
+    mv -T "$t" "$2" 2>/dev/null || rm -rf "$t"
+    exit 0
+fi
+d="$1"
+mkdir -p "$d"
+tools=(ip iptables iptables-save ip6tables-save nft iptables-restore ip6tables-restore sudo)
+[[ "${NO_NFT:-0}" == 1 ]] && tools=("${tools[@]/nft}")
+[[ "${NO_IP6TABLES_SAVE:-0}" == 1 ]] && tools=("${tools[@]/ip6tables-save}")
+for t in "${tools[@]}"; do
+    [[ -n "$t" ]] && ln -sfn "$HERE/netstub" "$d/$t"
+done
+if [[ "${CORRUPT_SUM:-0}" == 1 ]]; then
+    ln -sfn "$HERE/netstub" "$d/sha256sum"
+else
+    rm -f "$d/sha256sum"
+fi
+exit 0

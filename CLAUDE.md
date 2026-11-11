@@ -223,6 +223,7 @@ bash tests/rc-candidates/run.sh             # RC file candidates in main.sh (--r
 bash tests/view-container-logs/run.sh       # view-container-logs + lib/rhosp.sh + lib/containerlogs.sh (stub ssh/sudo/fzf/less, tmux, setsid)
 bash tests/search-container-logs/run.sh     # search-container-logs (same stubs; real find/grep/zgrep/xargs/nice/ionice/timeout)
 bash tests/list-routers/run.sh              # list-routers (stub CLI + stub curl: cli/api, pagination, incomplete CLI gateway info)
+bash tests/backup-network-state/run.sh      # backup-network-state (stub ssh with detached remote + /tmp map, stub sudo/ip/iptables*/nft; real iptables/nft in unshare -rn when available)
 bash main.sh --workdir . --list             # discovery + metadata as Markdown table
 bash main.sh --workdir . --no-fzf           # plain menu (same data as the TUI)
 bash main.sh --workdir .                    # TUI (needs a terminal, fzf, and an RC file)

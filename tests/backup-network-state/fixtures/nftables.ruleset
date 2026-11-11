@@ -1,0 +1,7 @@
+table inet tripleo_firewall {
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		ip saddr 10.99.42.7 counter packets 77 bytes 6600 drop comment "OSOPS-RULE-MARKER-nft"
+		tcp dport 22 counter packets 1000 bytes 64000 accept
+	}
+}

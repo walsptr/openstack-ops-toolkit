@@ -1,0 +1,4 @@
+default via 192.168.24.1 dev br-ctlplane proto static
+10.99.42.0/24 via 172.17.0.199 dev vlan20 proto static metric 4242
+192.168.24.0/24 dev br-ctlplane proto kernel scope link src 192.168.24.21
+local 192.168.24.21 dev br-ctlplane table local proto kernel scope host src 192.168.24.21

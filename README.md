@@ -204,6 +204,7 @@ Generated with `bash main.sh --workdir . --list`:
 | Collect Public Floating IPs | network | `network/collect-public-fip.sh` | no | Export floating IPs allocated from public networks to a CSV file |
 | IP Information | network | `network/get-ip-info.sh` | no | Find who uses an IP: floating IPs and port fixed IPs (single IP or list) |
 | List Routers | network | `network/list-routers.sh` | no | Daftar router beserta IP publik, network publik, project, dan domain → CSV di /tmp |
+| Backup Network State | rhosp | `rhosp/backup-network-state.sh` | no | Backup ip route/rule, iptables, dan nftables dari node overcloud ke undercloud |
 | Collect sosreport | rhosp | `rhosp/collect-sosreport.sh` | yes | Collect sosreport from selected RHOSP nodes (disables fencing safely when needed) |
 | Search Container Logs | rhosp | `rhosp/search-container-logs.sh` | no | Search a keyword in OpenStack container logs across RHOSP nodes |
 | View Container Logs | rhosp | `rhosp/view-container-logs.sh` | no | Search and read OpenStack container logs on RHOSP nodes (tail, follow) |
@@ -1002,6 +1003,111 @@ Environment (mainly for tests): `OSOPS_SSH`, `OSOPS_SCP`, `OSOPS_ANSIBLE_INVENTO
 `OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`, `OSOPS_SOS_LOCAL_DIR`, `OSOPS_SOS_MIN_FREE_GB` (5),
 `OSOPS_SOS_MIN_FREE_HARD_GB` (1), `OSOPS_SOS_DEST_GB_PER_NODE` (2), `OSOPS_SOS_PROGRESS_INTERVAL` (10).
 
+### Backup Network State (`rhosp/backup-network-state.sh`)
+
+Backs up the network state of selected **RHOSP 17.1** nodes to the undercloud: routing
+(`ip -4/-6 route show table all`, `ip -4/-6 rule show`, plus `ip -j` JSON when supported),
+`iptables-save` / `ip6tables-save` (the backend, `nf_tables` or `legacy`, is recorded from
+`iptables --version`) and `nft list ruleset` (all families). Modifies resources: **no** — nothing is
+ever applied, flushed, restored or added on a node. Run it on the undercloud as user `stack`; nodes
+are reached with the inventory user over SSH (same inventory search, picker and host key handling as
+the other RHOSP scripts). Marked `@platform: rhosp`.
+
+```bash
+# From the TUI: no arguments — nodes are picked (entries "[semua <Role>]", "Undercloud (lokal)")
+rhosp/backup-network-state.sh
+
+# Directly / from cron (no terminal: --nodes/--node/--role or --local is required)
+rhosp/backup-network-state.sh --nodes overcloud-controller-0,overcloud-computeiha-0
+rhosp/backup-network-state.sh --role Controller --include-netns
+rhosp/backup-network-state.sh --all --local --parallel 8      # asks to type the node count
+rhosp/backup-network-state.sh --role ComputeInstanceHA --counters --output-dir /srv/backup/netstate
+```
+
+| Option | Description |
+|---|---|
+| `--nodes H1,H2`, `--node HOST`, `--role ROLE` | Target nodes (repeatable, case-insensitive) |
+| `--all` | All overcloud nodes; needs a terminal and the typed node count |
+| `--local` | Also back up the host running the script (undercloud) |
+| `--include-netns` | Also back up every namespace from `ip netns list` (route, rule, iptables, nftables, e.g. `ovnmeta-*`, `qrouter-*`). More than 50 namespaces on a node asks for confirmation (no terminal: namespaces of that node are skipped). Names that are not `[A-Za-z0-9][A-Za-z0-9._:@-]*` are skipped, never used as a path |
+| `--counters` | Keep counters (`iptables-save -c`, `nft list ruleset`). Default: no rule counters, chain policy counters set to `[0:0]`, `nft -s` — backups of unchanged rules are identical and diffable |
+| `--no-verify` | Skip the syntax verification on the node (see below). The sha256 comparison node ↔ undercloud always runs |
+| `--parallel N` | Nodes at the same time (default 4) |
+| `--timeout SEC` | Collection time limit per node (default 120); a failed or timed-out node does not stop the others |
+| `--output-dir DIR` | Parent directory (default `${OSOPS_BACKUP_DIR:-$HOME/osops-backups}/network-state`, not `/tmp`: backups must survive a reboot). Existing content is never touched |
+
+How it works: one static script runs per node over SSH stdin (no user input in the remote command;
+`sudo` only for `iptables-save`, `ip6tables-save`, `nft`, `ip -n`/`ip netns exec` and the verification).
+Results are collected in a `mktemp` directory `/tmp/osops-netstate-<run_id>.*` (umask 077), sent
+as a tar.gz over SSH stdout and removed by the remote script. When a node fails, times out or the
+run is interrupted, the script additionally removes only that run's directories owned by the SSH
+user directly under `/tmp` (`find /tmp -maxdepth 1 -type d -user "$(id -un)" -name
+'osops-netstate-<run_id>.*'`). Tools missing on a node (e.g. `nft`, `ip6tables-save`) are `SKIPPED`
+items with a reason, not a node error. **The snapshot is not atomic**: neutron/OVN agents can change
+rules between commands; every command has its own timestamp in `meta.json`.
+
+Result (directories `700`, files `600`, never overwritten, old backups never deleted):
+
+```
+<output-dir>/<run_id>/
+├── MANIFEST.tsv     # host, item, status (OK/SKIPPED/FAILED), reason, size, sha256
+├── SHA256SUMS
+└── <host>/
+    ├── routes-v4.txt  routes-v6.txt  rules-v4.txt  rules-v6.txt
+    ├── routes-v4.json routes-v6.json rules-v4.json rules-v6.json
+    ├── iptables-v4.rules  iptables-v6.rules  nftables.ruleset
+    ├── meta.json      # hostname, node time, kernel, tool versions, backend, per-command rc/time/stderr
+    └── netns/<ns>/... # with --include-netns
+```
+
+Verification (default on): on the same node, `iptables-restore --test`, `ip6tables-restore --test`
+and `nft -c -f` check the backed-up files. None of them applies anything (test mode aborts instead of
+committing; `nft -c` lets the kernel validate and abort the batch) — checked with iptables 1.8.11
+(nf_tables) and nftables 1.1.6 in an isolated namespace (`tests/backup-network-state`, test
+`real_verify`). Limitation: on the nf_tables backend `--test` only checks syntax (unknown options,
+missing `COMMIT`); a missing chain or target is not detected. A failed verification marks the node
+`FAILED` (files are kept). A ruleset with `xt match` / `xt target` expressions (iptables-nft
+compatibility) cannot be loaded by `nft -f`: its nft verification is `SKIPPED` and the summary lists
+those nodes. Afterwards the sha256 of every file on the node is compared with the copy on the
+undercloud.
+
+Summary: per node `SUCCESS`/`FAILED`/`SKIPPED`, backend, files, size, verification and skipped
+items with reasons, the backup path and total size. Exit code 1 when a node `FAILED` (unreachable,
+auth, sudo, timeout, transfer, sha256 mismatch, verification); a changed host key, or an unknown key
+that is not accepted, is `SKIPPED`. The log `log/rhosp/backup-network-state-YYYYMMDD.log` has only
+counts, statuses, item names and paths — never rule or route content (nft error messages are reduced
+to `line N: Error: ...`).
+
+#### Manual restore (the script never restores)
+
+> ⚠️ **Restoring can cut off a node.** On TripleO nodes the firewall is managed by director
+> (`tripleo_firewall` / nftables rules from the deployment) and by neutron/OVN agents; a restored
+> ruleset can conflict with that and will be overwritten by the next deploy or agent sync. Prefer
+> fixing the cause (deploy, agent restart). Use a console (not only SSH), test first, and restore
+> only the table you need.
+
+```bash
+# Check first (applies nothing)
+sudo iptables-restore --test < iptables-v4.rules
+sudo nft -c -f nftables.ruleset
+
+# iptables / ip6tables (also the right tool for tables that contain "xt match"/"xt target":
+# those iptables-nft compat tables cannot be restored with nft -f)
+sudo iptables-restore < iptables-v4.rules
+sudo ip6tables-restore < iptables-v6.rules
+
+# nftables: the file has no "flush ruleset" — loading adds to the current rules.
+# Delete only the table you replace, e.g.:
+sudo nft delete table inet tripleo_firewall
+sudo nft -f nftables.ruleset          # or a file with only that table
+
+# Routes / rules: re-add individual entries by hand (ip route add ..., ip rule add ...);
+# never replay the whole file (kernel and agent routes are in it).
+```
+
+Environment (mainly for tests): `OSOPS_BACKUP_DIR`, `OSOPS_SSH`, `OSOPS_ANSIBLE_INVENTORY`, `OSOPS_FZF`,
+`OSOPS_RHOSP_RELEASE_FILE`, `OSOPS_STACK_HOME`.
+
 ### View Container Logs (`rhosp/view-container-logs.sh`) and Search Container Logs (`rhosp/search-container-logs.sh`)
 
 Read and search the OpenStack service logs of **RHOSP 17.1** nodes (`/var/log/containers`, one
@@ -1318,7 +1424,10 @@ against a stub OpenStack CLI (and stub `qemu-img` / `curl`; no cloud needed; req
 and an inventory fixture (needs `ssh-keygen`). `rhosp/view-container-logs.sh` and
 `rhosp/search-container-logs.sh` run against a stub `ssh` that executes the real remote commands
 (`find`, `tail`, `grep`, `zgrep`, `nice`, `ionice`, `timeout`, `xargs`) on a fake
-`/var/log/containers` tree per host, plus stub `sudo`/`fzf`/`less` (needs `setsid`, `gzip`):
+`/var/log/containers` tree per host, plus stub `sudo`/`fzf`/`less` (needs `setsid`, `gzip`).
+`rhosp/backup-network-state.sh` runs its real remote script through a stub `ssh` (detached remote,
+`/tmp` mapped per host) with stub `sudo`/`ip`/`iptables*`/`nft`; the `real_verify` test also uses
+real `iptables`/`nft` inside `unshare -rn` when available:
 
 ```bash
 bash tests/live-migrate/run.sh            # all tests
@@ -1333,6 +1442,7 @@ bash tests/collect-sosreport/run.sh
 bash tests/create-vm/run.sh
 bash tests/view-container-logs/run.sh
 bash tests/search-container-logs/run.sh
+bash tests/backup-network-state/run.sh
 ```
 
 ## Troubleshooting

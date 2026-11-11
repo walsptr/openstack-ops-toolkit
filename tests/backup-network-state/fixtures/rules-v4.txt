@@ -1,0 +1,4 @@
+0:	from all lookup local
+4242:	from 10.99.42.0/24 lookup 4242
+32766:	from all lookup main
+32767:	from all lookup default

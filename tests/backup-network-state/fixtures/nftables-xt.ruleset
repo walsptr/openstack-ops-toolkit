@@ -1,0 +1,8 @@
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+table ip filter {
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		xt match "string" counter packets 1 bytes 60 drop
+		ip saddr 10.99.42.7 counter packets 77 bytes 6600 drop comment "OSOPS-RULE-MARKER-nftxt"
+	}
+}
