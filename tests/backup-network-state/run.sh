@@ -511,7 +511,8 @@ test_run_id() {
     expect_eq "tidak ada direktori backup dibuat" "$(find "$WORK/backup" -mindepth 2 2>/dev/null | wc -l)" "0"
     # Skrip remote juga menolak run_id tidak valid (lapis kedua)
     local rs
-    rs="$(bash -c 'eval "$(sed -n "/^NS_RE=/p" "$1")"; eval "$(sed -n "/^REMOTE_SCRIPT=/,/^exit \$?.$/p" "$1")"; printf "%s" "$REMOTE_SCRIPT"' _ "$SCRIPT")"
+    # (skrip kolektor ada di lib/netstate.sh, dipakai bersama restore)
+    rs="$(bash -c 'source "$1" && printf "%s" "$NS_COLLECT_SCRIPT"' _ "$ROOT/lib/netstate.sh")"
     expect_match "remote: run_id tidak valid ditolak" "$(bash -c "$rs" osops-netstate 'a/../b' 0 0 0 10 2>&1; echo "rc=$?")" 'invalid run id.*rc=2'
     expect_match "remote: argumen bukan angka ditolak" "$(bash -c "$rs" osops-netstate 'abc' '0;x' 0 0 10 2>&1; echo "rc=$?")" 'invalid argument.*rc=2'
 }
