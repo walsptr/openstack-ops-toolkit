@@ -219,21 +219,20 @@ Generated with `bash main.sh --workdir . --list`:
 ### Live Migrate Instances (`servers/live-migrate.sh`)
 
 Rebalance: moves a list of instances to one target compute host with live migration, one at
-a time, with a confirmation per VM (or one batch confirmation in auto-approve mode), progress
-monitoring, and abort. (Evacuating a compute host for maintenance is out of scope.) Requires an admin role, `jq`, and compute microversion ≥ 2.30.
+a time, with a confirmation per VM (or auto approve), progress monitoring, and abort. (Evacuating a compute host for maintenance is out of scope.) Requires an admin role, `jq`, and compute microversion ≥ 2.30.
 
 ```bash
 # From the TUI: no arguments, everything is asked interactively.
 bash servers/live-migrate.sh --file vms.txt --target compute-07 --dry-run   # plan only
 bash servers/live-migrate.sh --file vms.txt --target compute-07 --interval 10 --timeout 45
-bash servers/live-migrate.sh --file vms.txt --target compute-07 --no-confirm  # auto approve: full plan + one batch confirmation
+bash servers/live-migrate.sh --file vms.txt --target compute-07 --no-confirm  # auto approve: no confirmation
 ```
 
 | Option | Description |
 |---|---|
 | `--file PATH` | List of instance IDs, one per line. `#` comments, blank lines, CRLF, extra spaces and duplicates are handled; invalid UUIDs are recorded as `SKIPPED (invalid id)` |
 | `--target HOST` | Target host (skips the picker; still validated as `nova-compute` enabled and up) |
-| `--no-confirm` | Auto approve: no per-VM prompt. The full plan is shown first (with the region), then **one** batch confirmation where you must type the number of VMs to migrate (anything else cancels: those VMs are `DECLINED`, nothing is migrated) |
+| `--no-confirm` | Auto approve: every VM is migrated one at a time **without any confirmation** and without the pre-check; only VMs already on the target (or not found) are `SKIPPED`. The region is shown at the start |
 | `--dry-run` | Pre-check all VMs and print the plan (`WILL MIGRATE` / `SKIP (<reason>)`); never migrates, no lock, no report file |
 | `--interval SEC` | Polling interval (default 5) |
 | `--timeout MIN` | Per-migration time limit before you are asked to wait or abort (default 30; `90s` for seconds). Never aborts automatically |
@@ -253,9 +252,10 @@ Flow:
    shown. Answer `y` migrate, `n` skip (`DECLINED`), `c` change the target for this VM only, `q`
    stop the batch (remaining VMs are reported as not processed). Default is `n`; there is no
    "yes to all".
-   Auto approve: no prompt. VMs skipped in the plan are reported `SKIPPED` with their reason; every
-   other VM is checked again right before its migration and `SKIPPED` if its state or source host
-   changed since the plan (`source host changed since plan (a -> b)`). Use `Ctrl-C` to stop the batch.
+   Auto approve: no prompt and no pre-check (operator decision). Only a VM already on the target
+   (or not found by `server show`) is `SKIPPED`; for any other VM the migrate request is sent, and
+   when Nova rejects it (e.g. not `ACTIVE`, locked, busy) the VM is `FAILED` with the API message.
+   Use `Ctrl-C` to stop the batch.
 5. While migrating, one status line shows status, migration status, memory progress, and elapsed
    time. Press `a` to abort (asks for confirmation). Abort is not instant: monitoring continues
    until Nova finishes; if the VM already reached the target it is `SUCCESS` ("abort terlambat").

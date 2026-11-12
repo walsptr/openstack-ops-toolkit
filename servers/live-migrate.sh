@@ -17,15 +17,15 @@ Usage: live-migrate.sh [--file PATH] [--target HOST] [--no-confirm] [--dry-run]
                        [--interval DETIK] [--timeout MENIT] [--delay DETIK]
 
 Live migration sekumpulan VM ke satu compute host tujuan, satu per satu,
-dengan konfirmasi per VM (atau satu konfirmasi batch), pemantauan progres,
-dan opsi abort.
+dengan konfirmasi per VM (atau auto approve), pemantauan progres, dan opsi
+abort.
 
 Options:
   --file PATH        File daftar instance ID (satu per baris, # = komentar)
   --target HOST      Host tujuan (melewati picker; tetap divalidasi enabled/up)
-  --no-confirm       Auto approve: tanpa konfirmasi per VM. Rencana lengkap
-                     ditampilkan dulu, lalu SATU konfirmasi batch dengan
-                     mengetik jumlah VM yang akan di-migrate
+  --no-confirm       Auto approve: semua VM langsung di-migrate satu per satu
+                     tanpa konfirmasi dan tanpa pre-check; hanya VM yang sudah
+                     di host tujuan yang dilewati (SKIPPED)
   --dry-run          Hanya pre-check dan rencana, tanpa migrasi
   --interval DETIK   Interval polling (default 5)
   --timeout MENIT    Batas waktu per migrasi sebelum ditanya wait/abort
@@ -43,8 +43,8 @@ Environment:
 
 Konfirmasi per VM: y = migrate, n = lewati, c = ganti host tujuan untuk
 VM ini, q = hentikan batch. Saat pemantauan: a = abort (dengan konfirmasi).
-Auto approve: setiap VM dicek ulang tepat sebelum migrasi dan dilewati bila
-state atau host asalnya berubah sejak rencana; Ctrl-C menghentikan batch.
+Auto approve: status/locked/task_state tidak dicek; Nova yang menolak (FAILED).
+Ctrl-C menghentikan batch.
 EOF
 }
 
@@ -102,11 +102,6 @@ HOST_LABELS=()
 RESULTS=()
 declare -A COUNTS=()
 declare -A PROJECT_NAMES=()
-# Rencana (dry-run / auto approve): alasan skip (kosong = akan di-migrate), nama, host asal
-declare -A PLAN_SKIP=()
-declare -A PLAN_NAME=()
-declare -A PLAN_SRC=()
-PLAN_WILL=0
 N_LINES=0
 N_DUP=0
 N_INVALID=0
@@ -1042,17 +1037,13 @@ run_batch() {
         fi
 
         if (( NO_CONFIRM )); then
-            # Auto approve: VM yang dilewati di rencana tidak dicek ulang
-            if [[ -n "${PLAN_SKIP[$id]}" ]]; then
-                echo "⏭️  SKIPPED (${PLAN_SKIP[$id]})"
-                record_result "$id" "${PLAN_NAME[$id]}" "${PLAN_SRC[$id]}" "$dst" SKIPPED 0 "${PLAN_SKIP[$id]}"
-                continue
-            fi
-
-            # Validasi ulang tepat sebelum migrasi (state bisa berubah sejak rencana)
-            precheck "$id" "$dst"
-            if [[ -z "$SKIP_REASON" && "$ST_HOST" != "${PLAN_SRC[$id]}" ]]; then
-                SKIP_REASON="source host changed since plan (${PLAN_SRC[$id]} -> $ST_HOST)"
+            # Auto approve: tanpa pre-check; hanya VM yang sudah di tujuan dilewati.
+            # server show tetap perlu untuk nama dan host asal.
+            SKIP_REASON=""
+            if ! get_state "$id"; then
+                SKIP_REASON="not found"
+            elif [[ "$ST_HOST" == "$dst" ]]; then
+                SKIP_REASON="already on target"
             fi
 
             if [[ -n "$SKIP_REASON" ]]; then
@@ -1103,7 +1094,7 @@ run_batch() {
                 ;;
             y)
                 log_event DECISION "resource=$id" decision=migrate "dst=$dst" \
-                    "confirm=$( (( NO_CONFIRM )) && echo batch || echo per-vm )"
+                    "confirm=$( (( NO_CONFIRM )) && echo auto || echo per-vm )"
                 migrate_vm "$id" "$dst"
 
                 if (( DELAY > 0 && i < total - 1 )); then
@@ -1117,23 +1108,11 @@ run_batch() {
     return 0
 }
 
-# Pre-check semua VM terhadap $TARGET dan cetak tabel rencana (dry-run dan
-# auto approve). Hasil: PLAN_SKIP[id], PLAN_NAME[id], PLAN_SRC[id], PLAN_WILL.
-build_plan() {
-    local id plan name src skip=0 auth
-
-    PLAN_WILL=0
+run_dry() {
+    local id plan name src will=0 skip=0
 
     echo
-    if (( DRY_RUN )); then
-        echo "${C_BOLD}Rencana (dry-run, tanpa migrasi) — host tujuan: $TARGET${C_RESET}"
-    else
-        auth="${OS_AUTH_URL:-}"
-        auth="${auth#*://}"
-        auth="${auth%%/*}"
-        echo "${C_BOLD}Rencana (auto approve) — host tujuan: $TARGET${C_RESET}"
-        echo "Region : ${OS_REGION_NAME:--} (auth ${auth:-${OS_CLOUD:+clouds.yaml: $OS_CLOUD}})"
-    fi
+    echo "${C_BOLD}Rencana (dry-run, tanpa migrasi) — host tujuan: $TARGET${C_RESET}"
     printf '%s%-36s %-24s %-20s %-20s %s%s\n' "$C_BOLD" ID NAME SRC DST PLAN "$C_RESET"
 
     for id in "${ENTRIES[@]}"; do
@@ -1141,76 +1120,33 @@ build_plan() {
         src="-"
 
         if ! valid_uuid "$id"; then
-            PLAN_SKIP[$id]="invalid id"
+            plan="SKIP (invalid id)"
         else
             precheck "$id" "$TARGET"
             name="$ST_NAME"
             src="$ST_HOST"
-            PLAN_SKIP[$id]="$SKIP_REASON"
+            if [[ -n "$SKIP_REASON" ]]; then
+                plan="SKIP ($SKIP_REASON)"
+            else
+                plan="WILL MIGRATE"
+            fi
         fi
-        PLAN_NAME[$id]="$name"
-        PLAN_SRC[$id]="$src"
 
-        if [[ -z "${PLAN_SKIP[$id]}" ]]; then
-            plan="WILL MIGRATE"
-            PLAN_WILL=$(( PLAN_WILL + 1 ))
+        if [[ "$plan" == "WILL MIGRATE" ]]; then
+            will=$(( will + 1 ))
         else
-            plan="SKIP (${PLAN_SKIP[$id]})"
             skip=$(( skip + 1 ))
         fi
 
-        if (( DRY_RUN )); then
-            log_info "PLAN dry_run=true resource=$id name=$name src=$src dst=$TARGET plan=\"$plan\""
-        else
-            log_event PLAN "resource=$id" "name=$name" "src=$src" "dst=$TARGET" "plan=$plan"
-        fi
+        log_info "PLAN dry_run=true resource=$id name=$name src=$src dst=$TARGET plan=\"$plan\""
         printf '%-36s %-24s %-20s %-20s %s\n' "${id:0:36}" "${name:0:24}" "${src:0:20}" "${TARGET:0:20}" "$plan"
     done
 
     echo
-    echo "WILL MIGRATE : $PLAN_WILL"
+    echo "WILL MIGRATE : $will"
     echo "SKIP         : $skip"
-    if (( DRY_RUN )); then
-        echo "Log          : ${LOG_FILE:-(logging nonaktif)}"
-        log_info "PLAN_SUMMARY dry_run=true will_migrate=$PLAN_WILL skip=$skip"
-    else
-        log_event PLAN_SUMMARY dry_run=0 "will_migrate=$PLAN_WILL" "skip=$skip" \
-            "region=${OS_REGION_NAME:--}" "dst=$TARGET"
-    fi
-    return 0
-}
-
-# Auto approve: tampilkan rencana lalu satu konfirmasi batch (ketik jumlah VM).
-# Return 1 = batal (semua VM sudah dicatat DECLINED/SKIPPED).
-confirm_batch() {
-    local answer id
-
-    build_plan
-
-    if (( PLAN_WILL == 0 )); then
-        echo "Tidak ada VM yang bisa di-migrate."
-        return 0
-    fi
-
-    echo
-    ask answer "Ketik jumlah VM yang akan di-migrate ($PLAN_WILL) untuk konfirmasi (kosong = batal): "
-    answer="$(trim "$answer")"
-
-    if [[ "$answer" == "$PLAN_WILL" ]]; then
-        log_event DECISION decision=batch-confirm "count=$PLAN_WILL"
-        return 0
-    fi
-
-    log_event DECISION decision=batch-cancel "expected=$PLAN_WILL" "typed=$answer"
-    echo "❌ Konfirmasi tidak cocok (${answer:-kosong} ≠ $PLAN_WILL). Tidak ada VM yang di-migrate."
-    for id in "${ENTRIES[@]}"; do
-        if [[ -n "${PLAN_SKIP[$id]}" ]]; then
-            record_result "$id" "${PLAN_NAME[$id]}" "${PLAN_SRC[$id]}" "$TARGET" SKIPPED 0 "${PLAN_SKIP[$id]}"
-        else
-            record_result "$id" "${PLAN_NAME[$id]}" "${PLAN_SRC[$id]}" "$TARGET" DECLINED 0 "batch confirmation mismatch"
-        fi
-    done
-    return 1
+    echo "Log          : ${LOG_FILE:-(logging nonaktif)}"
+    log_info "PLAN_SUMMARY dry_run=true will_migrate=$will skip=$skip"
 }
 
 # Pilihan mode konfirmasi bila --no-confirm tidak dipakai
@@ -1218,14 +1154,14 @@ choose_confirm_mode() {
     local answer
 
     if (( NO_CONFIRM )); then
-        log_event DECISION confirm_mode=batch source=argument
+        log_event DECISION confirm_mode=auto source=argument
         return 0
     fi
 
     echo
     echo "Mode konfirmasi:"
     echo "  1. Konfirmasi per VM (manual approve)"
-    echo "  2. Auto approve: tanpa konfirmasi per VM (rencana lengkap + satu konfirmasi batch)"
+    echo "  2. Auto approve: semua VM langsung di-migrate satu per satu, tanpa konfirmasi"
     ask answer "Pilih [1-2] (default 1): "
     case "$(trim "$answer")" in
         ""|1) ;;
@@ -1233,7 +1169,7 @@ choose_confirm_mode() {
         *)    die "Pilihan mode konfirmasi tidak valid: $answer" ;;
     esac
 
-    log_event DECISION "confirm_mode=$( (( NO_CONFIRM )) && echo batch || echo per-vm )" source=prompt
+    log_event DECISION "confirm_mode=$( (( NO_CONFIRM )) && echo auto || echo per-vm )" source=prompt
     return 0
 }
 
@@ -1242,6 +1178,8 @@ choose_confirm_mode() {
 # ============================================================
 
 main() {
+    local auth
+
     parse_args "$@"
     require_deps
 
@@ -1291,23 +1229,29 @@ main() {
     echo "🔧 API     : compute microversion $COMPUTE_API_VERSION"
 
     if (( DRY_RUN )); then
-        build_plan
+        run_dry
         return 0
     fi
 
     has_tty || die "Migrasi butuh terminal interaktif (/dev/tty) untuk konfirmasi."
 
     choose_confirm_mode
-    echo "✅ Mode    : $( (( NO_CONFIRM )) && echo 'auto approve (satu konfirmasi batch)' || echo 'konfirmasi per VM')"
+    if (( NO_CONFIRM )); then
+        auth="${OS_AUTH_URL:-}"
+        auth="${auth#*://}"
+        auth="${auth%%/*}"
+        echo "✅ Mode    : auto approve (tanpa konfirmasi per VM)"
+        echo "🌐 Region  : ${OS_REGION_NAME:--} (auth ${auth:-${OS_CLOUD:+clouds.yaml: $OS_CLOUD}})"
+    else
+        echo "✅ Mode    : konfirmasi per VM"
+    fi
 
     check_session
     acquire_lock
     init_report
 
     LOG_INTERRUPT_HOOK=on_interrupt
-    if (( ! NO_CONFIRM )) || confirm_batch; then
-        run_batch
-    fi
+    run_batch
     LOG_INTERRUPT_HOOK=""
 
     print_summary
