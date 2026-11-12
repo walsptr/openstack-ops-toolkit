@@ -219,19 +219,21 @@ Generated with `bash main.sh --workdir . --list`:
 ### Live Migrate Instances (`servers/live-migrate.sh`)
 
 Rebalance: moves a list of instances to one target compute host with live migration, one at
-a time, with a confirmation per VM, progress monitoring, and abort. (Evacuating a compute host for
-maintenance is out of scope.) Requires an admin role, `jq`, and compute microversion ≥ 2.30.
+a time, with a confirmation per VM (or one batch confirmation in auto-approve mode), progress
+monitoring, and abort. (Evacuating a compute host for maintenance is out of scope.) Requires an admin role, `jq`, and compute microversion ≥ 2.30.
 
 ```bash
 # From the TUI: no arguments, everything is asked interactively.
 bash servers/live-migrate.sh --file vms.txt --target compute-07 --dry-run   # plan only
 bash servers/live-migrate.sh --file vms.txt --target compute-07 --interval 10 --timeout 45
+bash servers/live-migrate.sh --file vms.txt --target compute-07 --no-confirm  # auto approve: full plan + one batch confirmation
 ```
 
 | Option | Description |
 |---|---|
 | `--file PATH` | List of instance IDs, one per line. `#` comments, blank lines, CRLF, extra spaces and duplicates are handled; invalid UUIDs are recorded as `SKIPPED (invalid id)` |
 | `--target HOST` | Target host (skips the picker; still validated as `nova-compute` enabled and up) |
+| `--no-confirm` | Auto approve: no per-VM prompt. The full plan is shown first (with the region), then **one** batch confirmation where you must type the number of VMs to migrate (anything else cancels: those VMs are `DECLINED`, nothing is migrated) |
 | `--dry-run` | Pre-check all VMs and print the plan (`WILL MIGRATE` / `SKIP (<reason>)`); never migrates, no lock, no report file |
 | `--interval SEC` | Polling interval (default 5) |
 | `--timeout MIN` | Per-migration time limit before you are asked to wait or abort (default 30; `90s` for seconds). Never aborts automatically |
@@ -242,18 +244,24 @@ Flow:
 
 1. The target host is chosen once from enabled/up compute hosts (fzf picker, or a numbered menu
    without fzf, with vCPU/RAM usage when the cloud reports it).
-2. Right before each VM's confirmation a pre-check runs: not found, status not `ACTIVE`, a
+2. Without `--no-confirm` or `--dry-run` you then choose the confirmation mode: `1` per VM (manual
+   approve, default) or `2` auto approve (same as `--no-confirm`). This is how the TUI, which
+   passes no arguments, offers both modes.
+3. Right before each VM's confirmation a pre-check runs: not found, status not `ACTIVE`, a
    `task_state` in progress, locked, or already on the target → `SKIPPED`.
-3. A summary (name, ID, project, flavor, source/target host, boot-from-volume or local disk) is
+4. A summary (name, ID, project, flavor, source/target host, boot-from-volume or local disk) is
    shown. Answer `y` migrate, `n` skip (`DECLINED`), `c` change the target for this VM only, `q`
    stop the batch (remaining VMs are reported as not processed). Default is `n`; there is no
    "yes to all".
-4. While migrating, one status line shows status, migration status, memory progress, and elapsed
+   Auto approve: no prompt. VMs skipped in the plan are reported `SKIPPED` with their reason; every
+   other VM is checked again right before its migration and `SKIPPED` if its state or source host
+   changed since the plan (`source host changed since plan (a -> b)`). Use `Ctrl-C` to stop the batch.
+5. While migrating, one status line shows status, migration status, memory progress, and elapsed
    time. Press `a` to abort (asks for confirmation). Abort is not instant: monitoring continues
    until Nova finishes; if the VM already reached the target it is `SUCCESS` ("abort terlambat").
    A rejected abort (e.g. post-copy) is shown and monitoring continues. When `--timeout` is
    reached you choose `w` (wait another period) or `a` (abort, with confirmation).
-5. Result: `SUCCESS` (on target), `FAILED` (status `ERROR`, or still on the source after Nova rolled
+6. Result: `SUCCESS` (on target), `FAILED` (status `ERROR`, or still on the source after Nova rolled
    back — the error from `server event show` is included), `ABORTED`. After `SUCCESS`, power state
    and port bindings are checked (warning only). The exit code is 1 when any VM `FAILED`.
 

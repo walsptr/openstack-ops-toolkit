@@ -148,6 +148,11 @@ answer() {
     wait_for "$1" "$2" && keys "$3" Enter
 }
 
+# mode_manual — jawab prompt mode konfirmasi dengan default (per VM)
+mode_manual() {
+    answer 'Pilih \[1-2\] \(default 1\)' 1 ""
+}
+
 tmux_exit() {
     wait_for '__EXIT=' 1 "${1:-60}" || { echo "?"; return 0; }
     screen_text | grep -o '__EXIT=[0-9]*' | tail -n 1 | cut -d= -f2
@@ -224,6 +229,7 @@ test_input_and_precheck() {
     f="$(input_file_mixed)"
 
     run_tmux "" --file "$f" --target compute-b --interval 1
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 y || return 0
     wait_for 'progress=[0-9]+%' 1 || true
     rc="$(tmux_exit)"
@@ -287,6 +293,7 @@ test_outcomes() {
     printf '%s\n' "$(uid 01)" "$(uid e1)" "$(uid e2)" "$(uid 04)" "$(uid 05)" "$(uid 06)" "$(uid 07)" "$(uid 08)" > "$WORK/ids.txt"
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1 --delay 1
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 y || return 0
     answer 'Migrate VM ini\?' 2 y || return 0
     answer 'Migrate VM ini\?' 3 y || return 0
@@ -318,7 +325,7 @@ test_outcomes() {
     expect_match "migrate ditolak API" "$(tsv 6 "$(uid 07)") $(tsv 8 "$(uid 07)")" '^FAILED migrate ditolak: Compute service'
     expect_eq "boot from volume sukses" "$(tsv 6 "$(uid 08)")" "SUCCESS"
     expect_match "jeda antar migrasi" "$(screen_text)" 'Jeda 1 detik'
-    expect_match "keputusan user dicatat" "$(log_text | grep -c 'DECISION')" '^[7-9]$'
+    expect_match "keputusan user dicatat" "$(log_text | grep -c 'DECISION resource=')" '^[7-9]$'
     expect_match "ringkasan per hasil" "$(screen_text)" 'SUCCESS +: 4'
 }
 
@@ -334,6 +341,7 @@ test_abort() {
     printf '%s\n' "$(uid a1)" "$(uid a2)" "$(uid a3)" > "$WORK/ids.txt"
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    mode_manual || return 0
 
     # 1) abort berhasil
     answer 'Migrate VM ini\?' 1 y || return 0
@@ -377,6 +385,7 @@ test_timeout() {
     echo >> "$WORK/ids.txt"
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1 --timeout 3s
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 y || return 0
     answer '\[W\]ait 3 detik lagi' 1 "" || return 0
     answer '\[W\]ait 3 detik lagi' 2 a || return 0
@@ -399,6 +408,7 @@ test_quit() {
     printf '%s\n' "$(uid 81)" "$(uid 82)" "$(uid 83)" > "$WORK/ids.txt"
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 n || return 0
     answer 'Migrate VM ini\?' 2 q || return 0
     rc="$(tmux_exit)"
@@ -419,6 +429,7 @@ test_interrupt() {
     printf '%s\n' "$(uid 91)" "$(uid 92)" > "$WORK/ids.txt"
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 y || return 0
     wait_for 'migration=running' 1 || return 0
     keys C-c
@@ -446,6 +457,7 @@ test_lock() {
     sleep 0.5
 
     run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    mode_manual || return 0
     rc="$(tmux_exit)"
     kill "$holder" 2>/dev/null || true
 
@@ -462,6 +474,7 @@ test_no_tmux() {
     echo >> "$WORK/ids.txt"
 
     NO_TMUX=1 run_tmux "" --file "$WORK/ids.txt" --target compute-b
+    mode_manual || return 0
     answer 'Tetap lanjut\?' 1 n || return 0
     rc="$(tmux_exit)"
 
@@ -489,6 +502,7 @@ test_interactive_picker() {
     keys compute-b
     sleep 0.5
     keys Enter
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 n || return 0
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
@@ -502,6 +516,7 @@ test_interactive_picker() {
     keys compute-c
     sleep 0.5
     keys Enter
+    mode_manual || return 0
     answer 'Migrate VM ini\?' 1 q || return 0
     rc="$(tmux_exit)"
     expect_eq "exit code 0" "$rc" "0"
@@ -531,7 +546,7 @@ test_cli() {
     begin "cli"
     run_direct --help
     expect_eq "--help exit 0" "$RC" "0"
-    expect_match "--help isi" "$OUT" 'Usage: live-migrate.sh .*--dry-run'
+    expect_match "--help isi" "$OUT" 'Usage: live-migrate.sh .*--no-confirm.*--dry-run'
     expect_true "--help tidak membuat log" bash -c "! ls '$WORK'/log/servers/*.log >/dev/null 2>&1"
 
     run_direct --bogus
@@ -557,11 +572,135 @@ test_cli() {
     expect_true "tests/ tidak ikut discovery" bash -c "! bash '$ROOT/main.sh' --discover '$ROOT' | grep -q tests/"
 }
 
+test_auto_approve() {
+    local rc f="$WORK/ids-auto.txt" scr
+    begin "auto_approve"
+    mk_server a1 vm-auto-1
+    mk_server a2 vm-auto-2
+    mk_server 52 vm-error '.status = "ERROR"'
+    mk_server a3 vm-moved
+    mk_server a4 vm-stopped
+    scenario a1 success 2
+    scenario a2 success 2
+    printf '%s\n' "$(uid a1)" not-a-uuid "$(uid 52)" "$(uid a3)" "$(uid a4)" "$(uid a2)" > "$f"
+
+    run_tmux "OS_REGION_NAME=region-test" --file "$f" --target compute-b --interval 1 --no-confirm
+    wait_for 'Ketik jumlah VM yang akan di-migrate \(4\)' 1 || return 0
+    scr="$(screen_text)"
+    expect_match "region ditampilkan di rencana" "$scr" 'Region : region-test'
+    expect_match "rencana: VM ERROR dilewati" "$scr" "$(uid 52) .*SKIP \(status=ERROR\)"
+    expect_true "tidak ada prompt mode (--no-confirm)" bash -c "! tmux -L lm-test-$$ capture-pane -p -t t -S -5000 | grep -q 'Pilih \[1-2\]'"
+    expect_true "belum ada migrate sebelum konfirmasi batch" bash -c "! grep -q 'server migrate ' '$WORK/state/calls.log'"
+
+    # State berubah setelah rencana: a3 pindah host, a4 dimatikan
+    jq '."OS-EXT-SRV-ATTR:host" = "compute-c"' "$WORK/state/servers/$(uid a3).json" > "$WORK/tmp.json" && \
+        mv "$WORK/tmp.json" "$WORK/state/servers/$(uid a3).json"
+    jq '.status = "SHUTOFF"' "$WORK/state/servers/$(uid a4).json" > "$WORK/tmp.json" && \
+        mv "$WORK/tmp.json" "$WORK/state/servers/$(uid a4).json"
+    keys 4 Enter
+    rc="$(tmux_exit 90)"
+
+    expect_eq "exit code 0" "$rc" "0"
+    expect_eq "VM 1 SUCCESS" "$(tsv 6 "$(uid a1)")" "SUCCESS"
+    expect_eq "VM 2 SUCCESS" "$(tsv 6 "$(uid a2)")" "SUCCESS"
+    expect_eq "ID tidak valid" "$(tsv 6 not-a-uuid)/$(tsv 8 not-a-uuid)" "SKIPPED/invalid id"
+    expect_eq "skip dari rencana" "$(tsv 6 "$(uid 52)")/$(tsv 8 "$(uid 52)")" "SKIPPED/status=ERROR"
+    expect_eq "host asal berubah -> SKIPPED" "$(tsv 6 "$(uid a3)")/$(tsv 8 "$(uid a3)")" \
+        "SKIPPED/source host changed since plan (compute-a -> compute-c)"
+    expect_eq "status berubah -> SKIPPED" "$(tsv 6 "$(uid a4)")/$(tsv 8 "$(uid a4)")" "SKIPPED/status=SHUTOFF"
+    expect_true "tidak ada prompt per VM" bash -c "! tmux -L lm-test-$$ capture-pane -p -t t -S -5000 | grep -q 'Migrate VM ini'"
+    expect_match "tepat 2 migrate" "$(grep -c 'server migrate ' "$WORK/state/calls.log")" '^2$'
+    expect_match "alasan skip di ringkasan" "$(screen_text)" 'vm-moved .*SKIPPED .*source host changed since plan'
+    expect_match "ringkasan SKIPPED" "$(screen_text)" 'SKIPPED +: 4'
+    expect_match "konfirmasi batch dicatat" "$(log_text | grep ' DECISION ')" 'decision=batch-confirm count=4'
+    expect_match "mode dari argumen dicatat" "$(log_text | grep ' DECISION ')" 'confirm_mode=batch source=argument'
+    expect_match "rencana per VM dicatat" "$(log_text | grep -c ' PLAN resource=')" '^6$'
+    expect_match "PLAN_SUMMARY dengan region" "$(log_text | grep ' PLAN_SUMMARY ')" 'will_migrate=4 skip=2 region=region-test dst=compute-b'
+    expect_match "decision migrate confirm=batch" "$(log_text | grep -c 'decision=migrate .*confirm=batch')" '^2$'
+    expect_match "RESULT untuk semua VM" "$(log_text | grep -c ' RESULT ')" '^6$'
+}
+
+test_auto_cancel() {
+    local rc
+    begin "auto_cancel"
+    mk_server c1 vm-c1
+    mk_server c2 vm-c2
+    mk_server 54 vm-locked '.locked = true'
+    printf '%s\n' "$(uid c1)" "$(uid c2)" "$(uid 54)" > "$WORK/ids.txt"
+
+    run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1 --no-confirm
+    answer 'Ketik jumlah VM yang akan di-migrate \(2\)' 1 3 || return 0
+    rc="$(tmux_exit)"
+
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "pesan tidak cocok" "$(screen_text)" 'Konfirmasi tidak cocok \(3 ≠ 2\)'
+    expect_eq "VM 1 DECLINED" "$(tsv 6 "$(uid c1)")/$(tsv 8 "$(uid c1)")" "DECLINED/batch confirmation mismatch"
+    expect_eq "VM 2 DECLINED" "$(tsv 6 "$(uid c2)")" "DECLINED"
+    expect_eq "VM locked SKIPPED" "$(tsv 6 "$(uid 54)")/$(tsv 8 "$(uid 54)")" "SKIPPED/locked"
+    expect_true "tidak ada migrate" bash -c "! grep -q 'server migrate ' '$WORK/state/calls.log'"
+    expect_match "batch-cancel dicatat" "$(log_text | grep ' DECISION ')" 'decision=batch-cancel expected=2 typed=3'
+    expect_match "RESULT DECLINED dicatat" "$(log_text | grep -c 'result=DECLINED')" '^2$'
+
+    begin "auto_cancel_empty"
+    mk_server c1 vm-c1
+    uid c1 > "$WORK/ids.txt"
+    run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1 --no-confirm
+    answer 'Ketik jumlah VM' 1 "" || return 0
+    rc="$(tmux_exit)"
+    expect_eq "kosong = batal, exit 0" "$rc/$(tsv 6 "$(uid c1)")" "0/DECLINED"
+}
+
+test_auto_mode_prompt() {
+    local rc
+    begin "auto_mode_prompt"
+    mk_server d1 vm-p1
+    mk_server d2 vm-p2
+    scenario d1 abort_ok
+    scenario d2 success 2
+    printf '%s\n' "$(uid d1)" "$(uid d2)" > "$WORK/ids.txt"
+
+    run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    answer 'Pilih \[1-2\] \(default 1\)' 1 2 || return 0
+    answer 'Ketik jumlah VM yang akan di-migrate \(2\)' 1 2 || return 0
+    # Abort saat pemantauan tetap tersedia; batch lanjut ke VM berikutnya
+    wait_for '\[vm-p1\] .*migration=running' 1 || return 0
+    keys a
+    answer 'Yakin abort' 1 y || return 0
+    rc="$(tmux_exit)"
+
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "mode auto ditampilkan" "$(screen_text)" 'Mode +: auto approve'
+    expect_eq "VM 1 ABORTED" "$(tsv 6 "$(uid d1)")" "ABORTED"
+    expect_eq "VM 2 lanjut otomatis -> SUCCESS" "$(tsv 6 "$(uid d2)")" "SUCCESS"
+    expect_match "mode dari prompt dicatat" "$(log_text | grep ' DECISION ')" 'confirm_mode=batch source=prompt'
+
+    begin "auto_mode_prompt_invalid"
+    mk_server d1 vm-p1
+    uid d1 > "$WORK/ids.txt"
+    run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1
+    answer 'Pilih \[1-2\]' 1 x || return 0
+    rc="$(tmux_exit)"
+    expect_eq "pilihan tidak valid -> exit 1" "$rc" "1"
+    expect_match "pesan pilihan tidak valid" "$(screen_text)" 'Pilihan mode konfirmasi tidak valid: x'
+    expect_true "tidak ada laporan / migrate" bash -c "! ls '$WORK'/log/servers/*-results.tsv >/dev/null 2>&1 && ! grep -q 'server migrate ' '$WORK/state/calls.log'"
+
+    begin "auto_nothing_to_migrate"
+    mk_server 54 vm-locked '.locked = true'
+    uid 54 > "$WORK/ids.txt"
+    run_tmux "" --file "$WORK/ids.txt" --target compute-b --interval 1 --no-confirm
+    rc="$(tmux_exit)"
+    expect_eq "exit code 0" "$rc" "0"
+    expect_match "pesan tidak ada VM" "$(screen_text)" 'Tidak ada VM yang bisa di-migrate'
+    expect_true "tidak ada prompt jumlah" bash -c "! tmux -L lm-test-$$ capture-pane -p -t t -S -5000 | grep -q 'Ketik jumlah'"
+    expect_eq "VM locked SKIPPED" "$(tsv 6 "$(uid 54)")" "SKIPPED"
+}
+
 # ============================================================
 # Run
 # ============================================================
 
-for t in cli input_and_precheck dry_run outcomes abort timeout quit interrupt lock no_tmux interactive_picker microversion; do
+for t in cli input_and_precheck dry_run outcomes abort timeout quit interrupt lock no_tmux interactive_picker microversion \
+         auto_approve auto_cancel auto_mode_prompt; do
     want "$t" && "test_$t"
 done
 
